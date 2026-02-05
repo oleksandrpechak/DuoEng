@@ -1,0 +1,116 @@
+{
+  "identity": {
+    "name": "DuoVocab Duel",
+    "persona": "E1 - The Anti-AI Designer",
+    "tone": "Playful, Soft, Encouraging, Minimalist",
+    "theme": "Light Mode Only (Pastel)"
+  },
+  "typography": {
+    "headings": {
+      "font_family": "Nunito, sans-serif",
+      "weights": ["700", "800"],
+      "usage": "All headings (h1-h6), buttons, and score numbers"
+    },
+    "body": {
+      "font_family": "DM Sans, sans-serif",
+      "weights": ["400", "500", "700"],
+      "usage": "Paragraphs, inputs, labels, and game descriptions"
+    },
+    "installation": "Import fonts via Google Fonts in index.css: @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;500;700&family=Nunito:wght@600;700;800&display=swap');"
+  },
+  "colors": {
+    "palette": {
+      "primary": "#A7C7E7",
+      "secondary": "#F4B6C2",
+      "background": "#FFFBF5",
+      "foreground": "#334155",
+      "accent": "#C1E1C1",
+      "destructive": "#FFB7B2"
+    },
+    "shadcn_variables": {
+      "root": {
+        "--background": "36 100% 99%",
+        "--foreground": "215 25% 27%",
+        "--card": "0 0% 100%",
+        "--card-foreground": "215 25% 27%",
+        "--popover": "0 0% 100%",
+        "--popover-foreground": "215 25% 27%",
+        "--primary": "210 56% 78%",
+        "--primary-foreground": "215 25% 20%",
+        "--secondary": "348 73% 83%",
+        "--secondary-foreground": "348 25% 20%",
+        "--muted": "210 40% 96%",
+        "--muted-foreground": "215 16% 47%",
+        "--accent": "120 33% 82%",
+        "--accent-foreground": "120 25% 20%",
+        "--destructive": "4 100% 85%",
+        "--destructive-foreground": "4 25% 20%",
+        "--border": "214 32% 91%",
+        "--input": "214 32% 91%",
+        "--ring": "210 56% 78%",
+        "--radius": "1rem"
+      }
+    }
+  },
+  "layout_strategy": {
+    "container": "max-w-md mx-auto min-h-screen bg-background flex flex-col",
+    "spacing": "Generous padding (p-6, p-8). Use gap-6 for vertical stacks.",
+    "corners": "Rounded-3xl for cards, Rounded-full for buttons and inputs.",
+    "shadows": "Soft, diffuse shadows: shadow-[0_8px_30px_rgb(0,0,0,0.04)]"
+  },
+  "components": {
+    "buttons": {
+      "style": "rounded-full font-bold tracking-wide transition-transform active:scale-95",
+      "variants": {
+        "default": "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm",
+        "secondary": "bg-secondary text-secondary-foreground hover:bg-secondary/90",
+        "outline": "border-2 border-primary text-primary hover:bg-primary/10"
+      }
+    },
+    "cards": {
+      "style": "bg-card rounded-3xl border-none shadow-[0_8px_30px_rgb(0,0,0,0.04)] p-6"
+    },
+    "inputs": {
+      "style": "rounded-full border-2 border-input bg-white px-6 py-6 text-lg focus-visible:ring-primary focus-visible:border-primary transition-all"
+    }
+  },
+  "visual_assets": {
+    "images": [
+      {
+        "category": "hero_background",
+        "url": "https://images.unsplash.com/photo-1762652345565-e38e420b6f30?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "description": "Abstract soft pastel geometric shapes for landing page background (use with overlay)"
+      },
+      {
+        "category": "learning_illustration",
+        "url": "https://images.unsplash.com/photo-1760008486699-dbc9c319691a?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "description": "Playful 3D abstract shapes for empty states or success screens"
+      }
+    ],
+    "icons": "Use 'lucide-react' with rounded stroke endings. Recommended: Swords (Duel), BookOpen (Vocab), Trophy (Score), Clock (Timer), User (Profile)."
+  },
+  "motion": {
+    "transitions": "transition-all duration-300 ease-out",
+    "animations": {
+      "fade_in": "animate-in fade-in zoom-in-95 duration-300",
+      "slide_up": "animate-in slide-in-from-bottom-4 duration-500",
+      "pulse": "animate-pulse"
+    }
+  },
+  "universal_guidelines": [
+    "Do NOT use gradients. Stick to solid pastel colors.",
+    "Ensure text contrast is sufficient. Use dark grey text on pastel backgrounds.",
+    "Use 'sonner' for notifications (Correct/Wrong feedback).",
+    "All interactive elements must have data-testid attributes.",
+    "Mobile-first design is critical. Ensure touch targets are large (min 44px).",
+    "Use 'framer-motion' for the scoreboard updates and turn transitions if possible, otherwise CSS transitions."
+  ],
+  "instructions_to_main_agent": [
+    "1. Update /app/frontend/src/index.css with the provided HSL variables and Google Fonts import.",
+    "2. Update /app/frontend/tailwind.config.js to extend the theme with the new font families (Nunito, DM Sans).",
+    "3. Create a 'Layout' component that centers content in a mobile-friendly container (max-w-md).",
+    "4. Use the 'hero_background' image for the Landing Page with a white/90 overlay to ensure text readability.",
+    "5. Implement the Game Board using the 'cards' style defined above.",
+    "6. Ensure the 'Challenge Mode' timer is prominent and uses the 'destructive' color when time is running low."
+  ]
+}
