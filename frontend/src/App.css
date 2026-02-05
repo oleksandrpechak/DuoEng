@@ -1,0 +1,67 @@
+/* DuoVocab Duel Styles */
+
+/* Layout */
+.app-container {
+    @apply max-w-md mx-auto min-h-screen flex flex-col;
+}
+
+/* Card styles */
+.game-card {
+    @apply bg-card rounded-3xl shadow-soft p-6;
+}
+
+/* Button styles */
+.btn-primary {
+    @apply rounded-full font-bold tracking-wide transition-all duration-300 active:scale-95 
+           bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm px-8 py-4;
+}
+
+.btn-secondary {
+    @apply rounded-full font-bold tracking-wide transition-all duration-300 active:scale-95 
+           bg-secondary text-secondary-foreground hover:bg-secondary/90 px-8 py-4;
+}
+
+.btn-outline {
+    @apply rounded-full font-bold tracking-wide transition-all duration-300 active:scale-95 
+           border-2 border-primary text-primary hover:bg-primary/10 px-8 py-4;
+}
+
+/* Input styles */
+.game-input {
+    @apply rounded-full border-2 border-input bg-white px-6 py-4 text-lg 
+           focus:ring-2 focus:ring-primary focus:border-primary transition-all duration-300
+           w-full;
+}
+
+/* Score display */
+.score-badge {
+    @apply inline-flex items-center justify-center min-w-[3rem] h-12 rounded-full 
+           font-heading font-bold text-xl;
+}
+
+/* Timer */
+.timer-display {
+    @apply font-heading font-bold text-2xl;
+}
+
+.timer-warning {
+    @apply text-destructive animate-pulse;
+}
+
+/* Word display */
+.word-display {
+    @apply font-heading font-bold text-3xl sm:text-4xl text-center py-8;
+}
+
+/* Feedback animations */
+.feedback-correct {
+    @apply bg-accent text-accent-foreground;
+}
+
+.feedback-partial {
+    @apply bg-primary text-primary-foreground;
+}
+
+.feedback-wrong {
+    @apply bg-destructive text-destructive-foreground;
+}
