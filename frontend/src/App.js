@@ -5,6 +5,7 @@ import LandingPage from "@/pages/LandingPage";
 import LobbyPage from "@/pages/LobbyPage";
 import GamePage from "@/pages/GamePage";
 import EndPage from "@/pages/EndPage";
+import WordLevelsPage from "@/pages/WordLevelsPage";
 
 function App() {
   return (
@@ -12,6 +13,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<LandingPage />} />
+          <Route path="/word-levels" element={<WordLevelsPage />} />
           <Route path="/lobby/:code" element={<LobbyPage />} />
           <Route path="/game/:code" element={<GamePage />} />
           <Route path="/end/:code" element={<EndPage />} />

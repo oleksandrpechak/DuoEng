@@ -18,6 +18,7 @@ from .logging_utils import configure_logging
 from .metrics import CONTENT_TYPE_LATEST, REQUESTS_TOTAL, generate_latest
 from .rate_limit import SlidingWindowLimiter
 from .routers.ai import router as ai_router
+from .routers.word_levels import router as word_levels_router
 from .schemas import (
     AdminSeedRequest,
     CreateRoomRequest,
@@ -268,6 +269,7 @@ async def metrics() -> Response:
 
 api_router.include_router(ai_router)
 app.include_router(ai_router)
+app.include_router(word_levels_router)
 app.include_router(api_router)
 
 

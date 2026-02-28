@@ -21,8 +21,21 @@ load_dotenv()
 
 config = context.config
 
-database_url = os.getenv("DATABASE_URL", settings.database_url)
-config.set_main_option("sqlalchemy.url", database_url)
+
+def _resolve_database_url() -> str:
+    raw = (os.getenv("DATABASE_URL") or settings.database_url or "").strip()
+    if not raw:
+        raise RuntimeError("DATABASE_URL is required for Alembic migrations")
+
+    # Some platforms still provide postgres://; SQLAlchemy expects postgresql://
+    if raw.startswith("postgres://"):
+        raw = raw.replace("postgres://", "postgresql://", 1)
+    return raw
+
+
+database_url = _resolve_database_url()
+# Alembic config parser treats `%` as interpolation marker.
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

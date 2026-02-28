@@ -11,7 +11,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . .
+RUN chmod +x /app/scripts/start.sh
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "gunicorn -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0:${PORT:-8000} server:app"]
+CMD ["/app/scripts/start.sh"]

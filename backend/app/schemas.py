@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -123,6 +123,27 @@ class AIGenerateRequest(BaseModel):
 
 class AIGenerateResponse(BaseModel):
     result: str
+
+
+CEFRLevel = Literal["A1", "A2", "B1", "B2", "C1", "C2"]
+WordInput = Annotated[str, Field(min_length=1, max_length=64)]
+
+
+class WordLevelsRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        json_schema_extra={"example": {"words": ["apple", "analyze", "meticulous"]}},
+    )
+
+    words: list[WordInput] = Field(min_length=1, max_length=200)
+
+
+class WordLevelItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    word: str
+    level: CEFRLevel
 
 
 class WsSubmitMessage(BaseModel):

@@ -68,6 +68,8 @@ class Settings:
     gemini_model: str
     gemini_max_output_tokens: int
     gemini_temperature: float
+    word_level_batch_size: int
+    word_level_max_words: int
     log_level: str
 
     @property
@@ -127,5 +129,7 @@ settings = Settings(
     gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip(),
     gemini_max_output_tokens=max(1, _as_int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS"), 512)),
     gemini_temperature=max(0.0, min(2.0, _as_float(os.getenv("GEMINI_TEMPERATURE"), 0.2))),
+    word_level_batch_size=max(1, _as_int(os.getenv("WORD_LEVEL_BATCH_SIZE"), 25)),
+    word_level_max_words=max(1, _as_int(os.getenv("WORD_LEVEL_MAX_WORDS"), 200)),
     log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
 )
