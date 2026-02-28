@@ -1,0 +1,20 @@
+VarCon Dataset License Notice
+=============================
+
+This project uses data derived from the VarCon dataset (Variant Conversion Info).
+
+Copyright (c) 2000-2020
+Kevin Atkinson and Benjamin Titze.
+
+The dataset is used under its license terms, which permit use, modification,
+and redistribution with proper attribution.
+
+The dataset is provided "as is", without warranty.
+
+Upstream references:
+- http://wordlist.aspell.net/
+- https://github.com/pavlo-liapin/kindle-eng-ukr-dictionary (src/varcon.zip)
+
+If a full upstream license text is required for legal review, use the official
+VarCon source/package referenced above and include that exact text verbatim in
+distribution artifacts.

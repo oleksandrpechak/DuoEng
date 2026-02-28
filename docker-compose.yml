@@ -1,17 +1,32 @@
-
-
 services:
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8001:8001"
+      - "8000:8000"
     environment:
+      - ENV=development
+      - PORT=8000
+      - SECRET_KEY=local-dev-secret-key
+      - DATABASE_URL=sqlite:///./duoeng.db
       - CORS_ORIGINS=http://localhost:3000
+      - TURN_TIMEOUT_SECONDS=30
+      - ROOM_CODE_LENGTH=8
+      - LLM_API_URL=
+      - LLM_API_KEY=
+      - LLM_TIMEOUT=1.5
+      - ENABLE_LLM_SCORING=true
+      - RATE_LIMIT_REQUESTS_PER_MIN=120
+      - RATE_LIMIT_SUBMITS_PER_MIN=60
+      - RATE_LIMIT_WS_MESSAGES_PER_MIN=180
+      - REDIS_URL=redis://redis:6379/0
+      - DEFAULT_ELO=1000
+      - K_FACTOR=32
     volumes:
       - ./backend:/app
-      - backend_data:/app/data
+    depends_on:
+      - redis
 
   frontend:
     build:
@@ -20,9 +35,13 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - REACT_APP_BACKEND_URL=http://localhost:8001
+      - REACT_APP_BACKEND_URL=http://localhost:8000
     depends_on:
       - backend
 
-volumes:
-  backend_data:
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
+
+volumes: {}

@@ -10,8 +10,11 @@ backend/venv/
 
 # Backend runtime artifacts
 backend/*.db
+backend/tmp-*.db
 backend/*.log
 backend/server
+backend/data/raw/*
+!backend/data/raw/.gitkeep
 
 # Frontend/node
 node_modules/
@@ -22,3 +25,6 @@ frontend/build/
 .env
 .env.local
 frontend/.env.local
+
+#private key
+*.json

@@ -11,7 +11,7 @@ from datetime import datetime
 import time
 
 class DuoVocabTester:
-    def __init__(self, base_url="https://duovocab-duel-1.preview.emergentagent.com/api"):
+    def __init__(self, base_url="http://localhost:8000/api"):
         self.base_url = base_url
         self.tests_run = 0
         self.tests_passed = 0
