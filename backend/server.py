@@ -1,24 +1,35 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends
-from fastapi.responses import JSONResponse
-from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-import os
-import logging
-import sqlite3
-from pathlib import Path
-from pydantic import BaseModel, Field
-from typing import List, Optional
-import uuid
-from datetime import datetime, timezone, timedelta
-import random
-import string
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+import logging
+import os
+from pathlib import Path
+import random
+import sqlite3
+import string
+from typing import Annotated, Literal, Optional
+import uuid
+
+from dotenv import load_dotenv
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Path as PathParam
+import jwt
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from starlette.middleware.cors import CORSMiddleware
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / ".env")
 
 # SQLite database path
-DB_PATH = ROOT_DIR / 'duovocab.db'
+DB_PATH = Path(os.getenv("DB_PATH", ROOT_DIR / "duovocab.db"))
+JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production")
+JWT_ALGORITHM = "HS256"
+JWT_EXP_MINUTES = int(os.getenv("JWT_EXP_MINUTES", "720"))
+ROOM_CODE_ATTEMPTS = 8
+CHALLENGE_TURN_SECONDS = 30
+
+RoomCodeParam = Annotated[
+    str,
+    PathParam(min_length=6, max_length=6, pattern=r"^[A-Za-z0-9]{6}$"),
+]
 
 # Create the main app
 app = FastAPI()
@@ -29,48 +40,56 @@ api_router = APIRouter(prefix="/api")
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename='server.log'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    filename="server.log",
 )
 logger = logging.getLogger(__name__)
 
-# Database connection helper
+
 @contextmanager
 def get_db():
+    """Yield a SQLite connection with FK checks enabled."""
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
         conn.commit()
     finally:
         conn.close()
 
+
 def init_db():
-    """Initialize SQLite database with all required tables"""
+    """Initialize SQLite database with all required tables."""
     with get_db() as conn:
         cursor = conn.cursor()
-        
+
         # Users table (guest auth)
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
                 nickname TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
-        ''')
-        
+            """
+        )
+
         # Words table (UA→EN vocabulary)
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS words (
                 id TEXT PRIMARY KEY,
                 ua TEXT NOT NULL,
                 en TEXT NOT NULL,
                 level TEXT NOT NULL CHECK(level IN ('B1', 'B2'))
             )
-        ''')
-        
+            """
+        )
+
         # Game rooms
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS game_rooms (
                 id TEXT PRIMARY KEY,
                 code TEXT UNIQUE NOT NULL,
@@ -78,12 +97,15 @@ def init_db():
                 target_score INTEGER NOT NULL DEFAULT 10,
                 status TEXT NOT NULL CHECK(status IN ('waiting', 'playing', 'finished')),
                 created_at TEXT NOT NULL,
-                winner_id TEXT
+                winner_id TEXT,
+                FOREIGN KEY (winner_id) REFERENCES users(id)
             )
-        ''')
-        
+            """
+        )
+
         # Game players (links users to rooms)
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS game_players (
                 id TEXT PRIMARY KEY,
                 room_id TEXT NOT NULL,
@@ -94,10 +116,12 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id),
                 UNIQUE(room_id, user_id)
             )
-        ''')
-        
+            """
+        )
+
         # User word history (track seen words)
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS user_word_history (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -107,10 +131,12 @@ def init_db():
                 FOREIGN KEY (word_id) REFERENCES words(id),
                 UNIQUE(user_id, word_id)
             )
-        ''')
-        
+            """
+        )
+
         # Turns table
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS turns (
                 id TEXT PRIMARY KEY,
                 room_id TEXT NOT NULL,
@@ -126,21 +152,22 @@ def init_db():
                 FOREIGN KEY (player_id) REFERENCES game_players(id),
                 FOREIGN KEY (word_id) REFERENCES words(id)
             )
-        ''')
-        
-        conn.commit()
+            """
+        )
+
         logger.info("Database initialized successfully")
+
 
 # Initialize database on startup
 init_db()
 
-# Seed sample words if empty
+
 def seed_sample_words():
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) as cnt FROM words")
-        count = cursor.fetchone()['cnt']
-        
+        count = cursor.fetchone()["cnt"]
+
         if count == 0:
             # Sample Ukrainian-English vocabulary (50 words)
             sample_words = [
@@ -197,37 +224,52 @@ def seed_sample_words():
                 ("технологія", "technology", "B2"),
                 ("здоров'я", "health", "B2"),
             ]
-            
+
             for ua, en, level in sample_words:
                 cursor.execute(
                     "INSERT INTO words (id, ua, en, level) VALUES (?, ?, ?, ?)",
-                    (str(uuid.uuid4()), ua, en, level)
+                    (str(uuid.uuid4()), ua, en, level),
                 )
-            
-            conn.commit()
-            logger.info(f"Seeded {len(sample_words)} sample words")
+
+            logger.info("Seeded %s sample words", len(sample_words))
+
 
 seed_sample_words()
 
-# Pydantic Models
+
+# Pydantic models
 class GuestAuthRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
     nickname: str = Field(..., min_length=2, max_length=20)
+
 
 class GuestAuthResponse(BaseModel):
     user_id: str
     nickname: str
+    access_token: str
+    token_type: str = "bearer"
+
 
 class CreateRoomRequest(BaseModel):
-    user_id: str
-    mode: str = "classic"
-    target_score: int = 10
+    model_config = ConfigDict(extra="forbid")
 
-class JoinRoomRequest(BaseModel):
-    user_id: str
+    mode: Literal["classic", "challenge"] = "classic"
+    target_score: int = Field(default=10, ge=1, le=100)
+
 
 class SubmitAnswerRequest(BaseModel):
-    user_id: str
-    answer: str
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    answer: str = Field(..., min_length=1, max_length=200)
+
+    @field_validator("answer")
+    @classmethod
+    def validate_answer(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Answer cannot be empty")
+        return value
+
 
 class PlayerInfo(BaseModel):
     user_id: str
@@ -235,11 +277,13 @@ class PlayerInfo(BaseModel):
     score: int
     is_current_turn: bool
 
+
 class TurnInfo(BaseModel):
     turn_id: str
-    word_ua: str
+    word_ua: Optional[str] = None
     time_remaining: Optional[int] = None
     current_player_id: str
+
 
 class GameStateResponse(BaseModel):
     room_id: str
@@ -247,480 +291,617 @@ class GameStateResponse(BaseModel):
     mode: str
     target_score: int
     status: str
-    players: List[PlayerInfo]
+    players: list[PlayerInfo]
     current_turn: Optional[TurnInfo] = None
     last_feedback: Optional[dict] = None
     winner: Optional[dict] = None
+
 
 class RoomCreatedResponse(BaseModel):
     room_id: str
     code: str
 
-# Helper functions
-def generate_room_code():
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
-def get_unseen_word_for_user(conn, user_id: str) -> Optional[dict]:
-    """Get a random word the user hasn't seen"""
+# Helper functions
+
+def create_access_token(user_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": user_id,
+        "iat": now,
+        "exp": now + timedelta(minutes=JWT_EXP_MINUTES),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def get_current_user_id(authorization: Optional[str] = Header(default=None)) -> str:
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing authorization header")
+
+    parts = authorization.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+
+    token = parts[1].strip()
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError as exc:
+        raise HTTPException(status_code=401, detail="Token has expired") from exc
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail="Invalid token") from exc
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    return user_id
+
+
+def ensure_user_exists(conn: sqlite3.Connection, user_id: str) -> None:
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT w.id, w.ua, w.en, w.level 
-        FROM words w 
+    cursor.execute("SELECT 1 FROM users WHERE id = ?", (user_id,))
+    if not cursor.fetchone():
+        raise HTTPException(status_code=401, detail="Unknown user")
+
+
+def generate_room_code() -> str:
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+
+def get_room_by_code(conn: sqlite3.Connection, code: str) -> Optional[dict]:
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM game_rooms WHERE code = ?", (code.upper(),))
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def get_room_player(
+    conn: sqlite3.Connection, room_id: str, user_id: str
+) -> Optional[sqlite3.Row]:
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM game_players WHERE room_id = ? AND user_id = ?",
+        (room_id, user_id),
+    )
+    return cursor.fetchone()
+
+
+def get_unseen_word_for_user(conn: sqlite3.Connection, user_id: str) -> Optional[dict]:
+    """Get a random word the user hasn't seen."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT w.id, w.ua, w.en, w.level
+        FROM words w
         WHERE w.id NOT IN (
             SELECT word_id FROM user_word_history WHERE user_id = ?
         )
-        ORDER BY RANDOM() 
+        ORDER BY RANDOM()
         LIMIT 1
-    ''', (user_id,))
+        """,
+        (user_id,),
+    )
     row = cursor.fetchone()
     if row:
         return dict(row)
-    
+
     # If all words seen, reset history and get random word
     cursor.execute("DELETE FROM user_word_history WHERE user_id = ?", (user_id,))
     cursor.execute("SELECT id, ua, en, level FROM words ORDER BY RANDOM() LIMIT 1")
     row = cursor.fetchone()
     return dict(row) if row else None
 
-def check_answer(user_answer: str, correct_en: str, word_ua: str) -> tuple:
-    """
-    Check answer and return (points, feedback_type)
-    - Exact match: +2 points
-    - Contains correct word in description: +1 point
-    - Wrong: 0 points
-    """
-    user_answer = user_answer.strip().lower()
-    correct_en = correct_en.strip().lower()
-    
-    # Exact match
-    if user_answer == correct_en:
+
+def check_answer(user_answer: str, correct_en: str) -> tuple[int, str]:
+    """Return (points, feedback_type)."""
+    normalized_answer = user_answer.strip().lower()
+    normalized_correct = correct_en.strip().lower()
+
+    if normalized_answer == normalized_correct:
         return 2, "correct"
-    
-    # Check if it's a valid description containing the word
-    if correct_en in user_answer and len(user_answer) > len(correct_en):
+
+    if normalized_correct in normalized_answer and len(normalized_answer) > len(normalized_correct):
         return 1, "partial"
-    
-    # Wrong answer
+
     return 0, "wrong"
 
-def get_current_player_turn(conn, room_id: str) -> Optional[str]:
-    """Get the player ID whose turn it is"""
+
+def get_current_player_turn(conn: sqlite3.Connection, room_id: str) -> Optional[str]:
+    """Get the game_player id whose turn it should be."""
     cursor = conn.cursor()
-    
-    # Count completed turns to determine whose turn
-    cursor.execute('''
-        SELECT COUNT(*) as turn_count FROM turns 
+
+    cursor.execute(
+        """
+        SELECT COUNT(*) as turn_count FROM turns
         WHERE room_id = ? AND status IN ('completed', 'expired')
-    ''', (room_id,))
-    turn_count = cursor.fetchone()['turn_count']
-    
-    # Get players ordered by player_order
-    cursor.execute('''
-        SELECT gp.id, gp.user_id FROM game_players gp
+        """,
+        (room_id,),
+    )
+    turn_count = cursor.fetchone()["turn_count"]
+
+    cursor.execute(
+        """
+        SELECT gp.id
+        FROM game_players gp
         WHERE gp.room_id = ?
         ORDER BY gp.player_order
-    ''', (room_id,))
+        """,
+        (room_id,),
+    )
     players = cursor.fetchall()
-    
     if not players:
         return None
-    
-    # Alternate turns
+
     current_idx = turn_count % len(players)
-    return players[current_idx]['id']
+    return players[current_idx]["id"]
 
-# API Endpoints
 
+def _create_turn_for_player(conn: sqlite3.Connection, room: dict, player_id: str) -> bool:
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM game_players WHERE id = ?", (player_id,))
+    player = cursor.fetchone()
+    if not player:
+        return False
+
+    word = get_unseen_word_for_user(conn, player["user_id"])
+    if not word:
+        return False
+
+    turn_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    expires_at = None
+    if room["mode"] == "challenge":
+        expires_at = (now + timedelta(seconds=CHALLENGE_TURN_SECONDS)).isoformat()
+
+    cursor.execute(
+        """
+        INSERT INTO turns (id, room_id, player_id, word_id, started_at, expires_at, status)
+        VALUES (?, ?, ?, ?, ?, ?, 'active')
+        """,
+        (turn_id, room["id"], player_id, word["id"], now.isoformat(), expires_at),
+    )
+
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO user_word_history (id, user_id, word_id, seen_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (str(uuid.uuid4()), player["user_id"], word["id"], now.isoformat()),
+    )
+
+    return True
+
+
+def _create_next_turn(conn: sqlite3.Connection, room: dict, last_player_id: str) -> None:
+    """Create the next turn for the other player if no active turn exists."""
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT 1 FROM turns WHERE room_id = ? AND status = 'active' LIMIT 1",
+        (room["id"],),
+    )
+    if cursor.fetchone():
+        return
+
+    cursor.execute(
+        """
+        SELECT gp.id
+        FROM game_players gp
+        WHERE gp.room_id = ? AND gp.id != ?
+        ORDER BY gp.player_order
+        LIMIT 1
+        """,
+        (room["id"], last_player_id),
+    )
+    next_player = cursor.fetchone()
+    if not next_player:
+        return
+
+    _create_turn_for_player(conn, room, next_player["id"])
+
+
+def _expire_active_turn_if_needed(conn: sqlite3.Connection, room: dict) -> bool:
+    if room["mode"] != "challenge" or room["status"] != "playing":
+        return False
+
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT t.id, t.player_id, t.expires_at
+        FROM turns t
+        WHERE t.room_id = ? AND t.status = 'active' AND t.expires_at IS NOT NULL
+        ORDER BY t.started_at ASC
+        LIMIT 1
+        """,
+        (room["id"],),
+    )
+    active_turn = cursor.fetchone()
+    if not active_turn:
+        return False
+
+    expires_at = datetime.fromisoformat(active_turn["expires_at"])
+    now = datetime.now(timezone.utc)
+    if now <= expires_at:
+        return False
+
+    cursor.execute(
+        """
+        UPDATE turns
+        SET status = 'expired', points_earned = 0, completed_at = ?
+        WHERE id = ? AND status = 'active'
+        """,
+        (now.isoformat(), active_turn["id"]),
+    )
+    if cursor.rowcount != 1:
+        return False
+
+    _create_next_turn(conn, room, active_turn["player_id"])
+    return True
+
+
+# API endpoints
 @api_router.get("/")
 async def root():
     return {"message": "DuoVocab Duel API"}
 
+
 @api_router.post("/auth/guest", response_model=GuestAuthResponse)
 async def guest_auth(request: GuestAuthRequest):
-    """Create a guest user with nickname"""
+    """Create a guest user and return a signed auth token."""
     with get_db() as conn:
         cursor = conn.cursor()
         user_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
-        
+
         cursor.execute(
             "INSERT INTO users (id, nickname, created_at) VALUES (?, ?, ?)",
-            (user_id, request.nickname, now)
+            (user_id, request.nickname, now),
         )
-        
-        return GuestAuthResponse(user_id=user_id, nickname=request.nickname)
+
+        return GuestAuthResponse(
+            user_id=user_id,
+            nickname=request.nickname,
+            access_token=create_access_token(user_id),
+        )
+
 
 @api_router.post("/rooms", response_model=RoomCreatedResponse)
-async def create_room(request: CreateRoomRequest):
-    """Create a new game room"""
+async def create_room(
+    request: CreateRoomRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """Create a new game room for the authenticated user."""
     with get_db() as conn:
         cursor = conn.cursor()
-        
-        # Verify user exists
-        cursor.execute("SELECT id FROM users WHERE id = ?", (request.user_id,))
-        if not cursor.fetchone():
-            raise HTTPException(status_code=404, detail="User not found")
-        
+        ensure_user_exists(conn, current_user_id)
+
         room_id = str(uuid.uuid4())
-        code = generate_room_code()
         now = datetime.now(timezone.utc).isoformat()
-        
-        # Create room
-        cursor.execute('''
-            INSERT INTO game_rooms (id, code, mode, target_score, status, created_at)
-            VALUES (?, ?, ?, ?, 'waiting', ?)
-        ''', (room_id, code, request.mode, request.target_score, now))
-        
-        # Add creator as first player
+
+        code = None
+        for _ in range(ROOM_CODE_ATTEMPTS):
+            candidate = generate_room_code()
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO game_rooms (id, code, mode, target_score, status, created_at)
+                    VALUES (?, ?, ?, ?, 'waiting', ?)
+                    """,
+                    (room_id, candidate, request.mode, request.target_score, now),
+                )
+                code = candidate
+                break
+            except sqlite3.IntegrityError as exc:
+                if "game_rooms.code" in str(exc).lower():
+                    continue
+                raise HTTPException(status_code=400, detail="Failed to create room") from exc
+
+        if not code:
+            raise HTTPException(
+                status_code=503,
+                detail="Failed to allocate a unique room code. Please retry.",
+            )
+
         player_id = str(uuid.uuid4())
-        cursor.execute('''
+        cursor.execute(
+            """
             INSERT INTO game_players (id, room_id, user_id, score, player_order)
             VALUES (?, ?, ?, 0, 1)
-        ''', (player_id, room_id, request.user_id))
-        
+            """,
+            (player_id, room_id, current_user_id),
+        )
+
         return RoomCreatedResponse(room_id=room_id, code=code)
 
+
 @api_router.post("/rooms/{code}/join")
-async def join_room(code: str, request: JoinRoomRequest):
-    """Join an existing room"""
+async def join_room(code: RoomCodeParam, current_user_id: str = Depends(get_current_user_id)):
+    """Join an existing room as the authenticated user."""
     with get_db() as conn:
         cursor = conn.cursor()
-        
-        # Find room
-        cursor.execute("SELECT * FROM game_rooms WHERE code = ?", (code.upper(),))
-        room = cursor.fetchone()
-        
+        ensure_user_exists(conn, current_user_id)
+
+        room = get_room_by_code(conn, code)
         if not room:
             raise HTTPException(status_code=404, detail="Room not found")
-        
-        room = dict(room)
-        
-        if room['status'] != 'waiting':
+
+        existing_player = get_room_player(conn, room["id"], current_user_id)
+        if existing_player:
+            return {"message": "Already in room", "room_id": room["id"]}
+
+        if room["status"] != "waiting":
             raise HTTPException(status_code=400, detail="Room is not accepting players")
-        
-        # Check if user already in room
-        cursor.execute('''
-            SELECT id FROM game_players WHERE room_id = ? AND user_id = ?
-        ''', (room['id'], request.user_id))
-        if cursor.fetchone():
-            return {"message": "Already in room", "room_id": room['id']}
-        
-        # Count current players
-        cursor.execute("SELECT COUNT(*) as cnt FROM game_players WHERE room_id = ?", (room['id'],))
-        player_count = cursor.fetchone()['cnt']
-        
+
+        cursor.execute("SELECT COUNT(*) as cnt FROM game_players WHERE room_id = ?", (room["id"],))
+        player_count = cursor.fetchone()["cnt"]
         if player_count >= 2:
             raise HTTPException(status_code=400, detail="Room is full")
-        
-        # Add player
+
         player_id = str(uuid.uuid4())
-        cursor.execute('''
+        cursor.execute(
+            """
             INSERT INTO game_players (id, room_id, user_id, score, player_order)
-            VALUES (?, ?, ?, 0, 2)
-        ''', (player_id, room['id'], request.user_id))
-        
-        # Start game if 2 players
-        cursor.execute("UPDATE game_rooms SET status = 'playing' WHERE id = ?", (room['id'],))
-        
-        # Create first turn
-        first_player_id = get_current_player_turn(conn, room['id'])
-        if first_player_id:
-            cursor.execute("SELECT user_id FROM game_players WHERE id = ?", (first_player_id,))
-            first_user = cursor.fetchone()
-            if first_user:
-                word = get_unseen_word_for_user(conn, first_user['user_id'])
-                if word:
-                    turn_id = str(uuid.uuid4())
-                    now = datetime.now(timezone.utc)
-                    expires_at = None
-                    if room['mode'] == 'challenge':
-                        expires_at = (now + timedelta(seconds=30)).isoformat()
-                    
-                    cursor.execute('''
-                        INSERT INTO turns (id, room_id, player_id, word_id, started_at, expires_at, status)
-                        VALUES (?, ?, ?, ?, ?, ?, 'active')
-                    ''', (turn_id, room['id'], first_player_id, word['id'], now.isoformat(), expires_at))
-                    
-                    # Mark word as seen
-                    cursor.execute('''
-                        INSERT OR IGNORE INTO user_word_history (id, user_id, word_id, seen_at)
-                        VALUES (?, ?, ?, ?)
-                    ''', (str(uuid.uuid4()), first_user['user_id'], word['id'], now.isoformat()))
-        
-        return {"message": "Joined room", "room_id": room['id']}
+            VALUES (?, ?, ?, 0, ?)
+            """,
+            (player_id, room["id"], current_user_id, player_count + 1),
+        )
+
+        # Start game when second player joins.
+        cursor.execute("UPDATE game_rooms SET status = 'playing' WHERE id = ?", (room["id"],))
+        room["status"] = "playing"
+
+        # Create first turn if it does not exist yet.
+        cursor.execute(
+            "SELECT 1 FROM turns WHERE room_id = ? AND status = 'active' LIMIT 1",
+            (room["id"],),
+        )
+        if not cursor.fetchone():
+            first_player_id = get_current_player_turn(conn, room["id"])
+            if first_player_id:
+                _create_turn_for_player(conn, room, first_player_id)
+
+        return {"message": "Joined room", "room_id": room["id"]}
+
 
 @api_router.get("/rooms/{code}/state", response_model=GameStateResponse)
-async def get_room_state(code: str, user_id: str):
-    """Get current game state (for polling)"""
+async def get_room_state(code: RoomCodeParam, current_user_id: str = Depends(get_current_user_id)):
+    """Get the game state visible to the authenticated room member."""
     with get_db() as conn:
         cursor = conn.cursor()
-        
-        # Find room
-        cursor.execute("SELECT * FROM game_rooms WHERE code = ?", (code.upper(),))
-        room = cursor.fetchone()
-        
+        ensure_user_exists(conn, current_user_id)
+
+        room = get_room_by_code(conn, code)
         if not room:
             raise HTTPException(status_code=404, detail="Room not found")
-        
-        room = dict(room)
-        
-        # Check for expired turns in challenge mode
-        if room['mode'] == 'challenge' and room['status'] == 'playing':
-            cursor.execute('''
-                SELECT * FROM turns 
-                WHERE room_id = ? AND status = 'active' AND expires_at IS NOT NULL
-            ''', (room['id'],))
-            active_turn = cursor.fetchone()
-            
-            if active_turn:
-                active_turn = dict(active_turn)
-                expires_at = datetime.fromisoformat(active_turn['expires_at'])
-                if datetime.now(timezone.utc) > expires_at:
-                    # Expire the turn
-                    cursor.execute('''
-                        UPDATE turns SET status = 'expired', points_earned = 0, completed_at = ?
-                        WHERE id = ?
-                    ''', (datetime.now(timezone.utc).isoformat(), active_turn['id']))
-                    conn.commit()
-        
-        # Get players
-        cursor.execute('''
-            SELECT gp.*, u.nickname 
-            FROM game_players gp 
-            JOIN users u ON gp.user_id = u.id 
+
+        current_member = get_room_player(conn, room["id"], current_user_id)
+        if not current_member:
+            raise HTTPException(status_code=403, detail="You are not a member of this room")
+
+        _expire_active_turn_if_needed(conn, room)
+
+        cursor.execute(
+            """
+            SELECT gp.*, u.nickname
+            FROM game_players gp
+            JOIN users u ON gp.user_id = u.id
             WHERE gp.room_id = ?
             ORDER BY gp.player_order
-        ''', (room['id'],))
+            """,
+            (room["id"],),
+        )
         players_rows = cursor.fetchall()
-        
-        # Get current turn player
-        current_player_id = get_current_player_turn(conn, room['id'])
-        
-        players = []
-        for p in players_rows:
-            p = dict(p)
-            players.append(PlayerInfo(
-                user_id=p['user_id'],
-                nickname=p['nickname'],
-                score=p['score'],
-                is_current_turn=(p['id'] == current_player_id)
-            ))
-        
-        # Get active turn
-        current_turn = None
-        cursor.execute('''
+
+        cursor.execute(
+            """
             SELECT t.*, w.ua, w.en, gp.user_id as player_user_id
-            FROM turns t 
+            FROM turns t
             JOIN words w ON t.word_id = w.id
             JOIN game_players gp ON t.player_id = gp.id
             WHERE t.room_id = ? AND t.status = 'active'
-        ''', (room['id'],))
-        turn_row = cursor.fetchone()
-        
-        if turn_row:
-            turn_row = dict(turn_row)
+            LIMIT 1
+            """,
+            (room["id"],),
+        )
+        active_turn = cursor.fetchone()
+
+        current_player_game_id = None
+        current_turn = None
+        if active_turn:
+            turn_row = dict(active_turn)
+            current_player_game_id = turn_row["player_id"]
             time_remaining = None
-            if turn_row['expires_at']:
-                expires = datetime.fromisoformat(turn_row['expires_at'])
+            if turn_row["expires_at"]:
+                expires = datetime.fromisoformat(turn_row["expires_at"])
                 remaining = (expires - datetime.now(timezone.utc)).total_seconds()
                 time_remaining = max(0, int(remaining))
-            
+
+            visible_word = turn_row["ua"] if turn_row["player_user_id"] == current_user_id else None
             current_turn = TurnInfo(
-                turn_id=turn_row['id'],
-                word_ua=turn_row['ua'],
+                turn_id=turn_row["id"],
+                word_ua=visible_word,
                 time_remaining=time_remaining,
-                current_player_id=turn_row['player_user_id']
+                current_player_id=turn_row["player_user_id"],
             )
-        
-        # Get last feedback (last completed turn)
+        else:
+            current_player_game_id = get_current_player_turn(conn, room["id"])
+
+        players = [
+            PlayerInfo(
+                user_id=row["user_id"],
+                nickname=row["nickname"],
+                score=row["score"],
+                is_current_turn=(row["id"] == current_player_game_id),
+            )
+            for row in players_rows
+        ]
+
         last_feedback = None
-        cursor.execute('''
+        cursor.execute(
+            """
             SELECT t.*, w.ua, w.en, u.nickname
-            FROM turns t 
+            FROM turns t
             JOIN words w ON t.word_id = w.id
             JOIN game_players gp ON t.player_id = gp.id
             JOIN users u ON gp.user_id = u.id
             WHERE t.room_id = ? AND t.status IN ('completed', 'expired')
             ORDER BY t.completed_at DESC
             LIMIT 1
-        ''', (room['id'],))
+            """,
+            (room["id"],),
+        )
         last_turn = cursor.fetchone()
-        
         if last_turn:
-            last_turn = dict(last_turn)
             last_feedback = {
-                "player_nickname": last_turn['nickname'],
-                "word_ua": last_turn['ua'],
-                "correct_en": last_turn['en'],
-                "answer": last_turn['answer'] or "(no answer)",
-                "points": last_turn['points_earned'],
-                "status": last_turn['status']
+                "player_nickname": last_turn["nickname"],
+                "word_ua": last_turn["ua"],
+                "correct_en": last_turn["en"],
+                "answer": last_turn["answer"] or "(no answer)",
+                "points": last_turn["points_earned"],
+                "status": last_turn["status"],
             }
-        
-        # Check winner
+
         winner = None
-        if room['status'] == 'finished' and room['winner_id']:
-            cursor.execute('''
-                SELECT u.nickname FROM users u WHERE u.id = ?
-            ''', (room['winner_id'],))
+        if room["status"] == "finished" and room["winner_id"]:
+            cursor.execute("SELECT nickname FROM users WHERE id = ?", (room["winner_id"],))
             winner_row = cursor.fetchone()
             if winner_row:
-                winner = {"user_id": room['winner_id'], "nickname": winner_row['nickname']}
-        
+                winner = {"user_id": room["winner_id"], "nickname": winner_row["nickname"]}
+
         return GameStateResponse(
-            room_id=room['id'],
-            code=room['code'],
-            mode=room['mode'],
-            target_score=room['target_score'],
-            status=room['status'],
+            room_id=room["id"],
+            code=room["code"],
+            mode=room["mode"],
+            target_score=room["target_score"],
+            status=room["status"],
             players=players,
             current_turn=current_turn,
             last_feedback=last_feedback,
-            winner=winner
+            winner=winner,
         )
 
+
 @api_router.post("/rooms/{code}/turn")
-async def submit_answer(code: str, request: SubmitAnswerRequest):
-    """Submit an answer for current turn"""
+async def submit_answer(
+    code: RoomCodeParam,
+    request: SubmitAnswerRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """Submit an answer for the authenticated player's room turn."""
     with get_db() as conn:
         cursor = conn.cursor()
-        
-        # Find room
-        cursor.execute("SELECT * FROM game_rooms WHERE code = ?", (code.upper(),))
-        room = cursor.fetchone()
-        
+        ensure_user_exists(conn, current_user_id)
+
+        room = get_room_by_code(conn, code)
         if not room:
             raise HTTPException(status_code=404, detail="Room not found")
-        
-        room = dict(room)
-        
-        if room['status'] != 'playing':
+
+        if room["status"] != "playing":
             raise HTTPException(status_code=400, detail="Game is not in progress")
-        
-        # Get active turn
-        cursor.execute('''
-            SELECT t.*, w.en, gp.user_id as player_user_id, gp.id as game_player_id, w.ua
-            FROM turns t 
+
+        current_member = get_room_player(conn, room["id"], current_user_id)
+        if not current_member:
+            raise HTTPException(status_code=403, detail="You are not a member of this room")
+
+        _expire_active_turn_if_needed(conn, room)
+
+        cursor.execute(
+            """
+            SELECT t.*, w.en, w.ua, gp.user_id as player_user_id, gp.id as game_player_id
+            FROM turns t
             JOIN words w ON t.word_id = w.id
             JOIN game_players gp ON t.player_id = gp.id
             WHERE t.room_id = ? AND t.status = 'active'
-        ''', (room['id'],))
+            LIMIT 1
+            """,
+            (room["id"],),
+        )
         turn = cursor.fetchone()
-        
         if not turn:
             raise HTTPException(status_code=400, detail="No active turn")
-        
+
         turn = dict(turn)
-        
-        # Verify it's this player's turn
-        if turn['player_user_id'] != request.user_id:
+        if turn["player_user_id"] != current_user_id:
             raise HTTPException(status_code=403, detail="Not your turn")
-        
-        # Check if expired (challenge mode)
-        if turn['expires_at']:
-            expires = datetime.fromisoformat(turn['expires_at'])
-            if datetime.now(timezone.utc) > expires:
-                # Mark as expired
-                cursor.execute('''
-                    UPDATE turns SET status = 'expired', points_earned = 0, completed_at = ?
-                    WHERE id = ?
-                ''', (datetime.now(timezone.utc).isoformat(), turn['id']))
-                
-                # Create next turn
-                await _create_next_turn(conn, room, turn['game_player_id'])
-                
-                return {"message": "Turn expired", "points": 0, "correct_answer": turn['en']}
-        
-        # Check answer
-        points, feedback_type = check_answer(request.answer, turn['en'], turn['ua'])
-        
-        # Update turn
+
+        # Handle the edge case where turn expires between read and write.
+        if turn["expires_at"]:
+            expires = datetime.fromisoformat(turn["expires_at"])
+            now_dt = datetime.now(timezone.utc)
+            if now_dt > expires:
+                cursor.execute(
+                    """
+                    UPDATE turns
+                    SET status = 'expired', points_earned = 0, completed_at = ?
+                    WHERE id = ? AND status = 'active'
+                    """,
+                    (now_dt.isoformat(), turn["id"]),
+                )
+                if cursor.rowcount == 1:
+                    _create_next_turn(conn, room, turn["game_player_id"])
+                return {
+                    "message": "Turn expired",
+                    "points": 0,
+                    "feedback": "expired",
+                    "correct_answer": turn["en"],
+                }
+
+        points, feedback_type = check_answer(request.answer, turn["en"])
         now = datetime.now(timezone.utc).isoformat()
-        cursor.execute('''
-            UPDATE turns SET answer = ?, points_earned = ?, completed_at = ?, status = 'completed'
-            WHERE id = ?
-        ''', (request.answer, points, now, turn['id']))
-        
-        # Update player score
-        cursor.execute('''
-            UPDATE game_players SET score = score + ? WHERE id = ?
-        ''', (points, turn['game_player_id']))
-        
-        # Check for winner
-        cursor.execute("SELECT score FROM game_players WHERE id = ?", (turn['game_player_id'],))
-        new_score = cursor.fetchone()['score']
-        
-        if new_score >= room['target_score']:
-            # Game over!
-            cursor.execute('''
-                UPDATE game_rooms SET status = 'finished', winner_id = ? WHERE id = ?
-            ''', (turn['player_user_id'], room['id']))
-            
+
+        cursor.execute(
+            """
+            UPDATE turns
+            SET answer = ?, points_earned = ?, completed_at = ?, status = 'completed'
+            WHERE id = ? AND status = 'active'
+            """,
+            (request.answer, points, now, turn["id"]),
+        )
+        if cursor.rowcount != 1:
+            raise HTTPException(status_code=409, detail="Turn was already processed")
+
+        cursor.execute(
+            "UPDATE game_players SET score = score + ? WHERE id = ?",
+            (points, turn["game_player_id"]),
+        )
+
+        cursor.execute("SELECT score FROM game_players WHERE id = ?", (turn["game_player_id"],))
+        new_score = cursor.fetchone()["score"]
+
+        if new_score >= room["target_score"]:
+            cursor.execute(
+                "UPDATE game_rooms SET status = 'finished', winner_id = ? WHERE id = ?",
+                (turn["player_user_id"], room["id"]),
+            )
+            room["status"] = "finished"
             return {
                 "message": "You win!",
                 "points": points,
                 "feedback": feedback_type,
-                "correct_answer": turn['en'],
-                "game_over": True
+                "correct_answer": turn["en"],
+                "game_over": True,
             }
-        
-        # Create next turn
-        await _create_next_turn(conn, room, turn['game_player_id'])
-        
+
+        _create_next_turn(conn, room, turn["game_player_id"])
+
         return {
             "message": "Answer submitted",
             "points": points,
             "feedback": feedback_type,
-            "correct_answer": turn['en']
+            "correct_answer": turn["en"],
         }
 
-async def _create_next_turn(conn, room: dict, last_player_id: str):
-    """Create the next turn for the other player"""
-    cursor = conn.cursor()
-    
-    # Get next player
-    cursor.execute('''
-        SELECT gp.id, gp.user_id FROM game_players gp
-        WHERE gp.room_id = ? AND gp.id != ?
-    ''', (room['id'], last_player_id))
-    next_player = cursor.fetchone()
-    
-    if not next_player:
-        return
-    
-    next_player = dict(next_player)
-    
-    # Get unseen word for next player
-    word = get_unseen_word_for_user(conn, next_player['user_id'])
-    if not word:
-        return
-    
-    turn_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
-    expires_at = None
-    if room['mode'] == 'challenge':
-        expires_at = (now + timedelta(seconds=30)).isoformat()
-    
-    cursor.execute('''
-        INSERT INTO turns (id, room_id, player_id, word_id, started_at, expires_at, status)
-        VALUES (?, ?, ?, ?, ?, ?, 'active')
-    ''', (turn_id, room['id'], next_player['id'], word['id'], now.isoformat(), expires_at))
-    
-    # Mark word as seen
-    cursor.execute('''
-        INSERT OR IGNORE INTO user_word_history (id, user_id, word_id, seen_at)
-        VALUES (?, ?, ?, ?)
-    ''', (str(uuid.uuid4()), next_player['user_id'], word['id'], now.isoformat()))
 
 @api_router.get("/words/count")
 async def get_word_count():
-    """Get total word count"""
+    """Get total word count."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) as total, level FROM words GROUP BY level")
         results = cursor.fetchall()
-        counts = {r['level']: r['total'] for r in results}
+        counts = {row["level"]: row["total"] for row in results}
         return {"total": sum(counts.values()), "by_level": counts}
+
 
 # Include the router
 app.include_router(api_router)
@@ -728,7 +909,7 @@ app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(","),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -737,4 +918,5 @@ port = int(os.getenv("PORT", 8001))
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)

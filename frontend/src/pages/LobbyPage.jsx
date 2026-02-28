@@ -4,9 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Copy, Users, Clock, Target, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import axios from "axios";
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import api from "@/lib/api";
 
 export default function LobbyPage() {
   const navigate = useNavigate();
@@ -15,18 +13,16 @@ export default function LobbyPage() {
   const [isLoading, setIsLoading] = useState(true);
 
   const userId = sessionStorage.getItem("userId");
-  const nickname = sessionStorage.getItem("nickname");
+  const accessToken = sessionStorage.getItem("accessToken");
 
   const fetchGameState = useCallback(async () => {
-    if (!userId) {
+    if (!userId || !accessToken) {
       navigate("/");
       return;
     }
 
     try {
-      const response = await axios.get(`${API}/rooms/${code}/state`, {
-        params: { user_id: userId }
-      });
+      const response = await api.get(`/rooms/${code}/state`);
       setGameState(response.data);
 
       // If game has started, navigate to game page
@@ -38,7 +34,7 @@ export default function LobbyPage() {
       navigate("/");
     }
     setIsLoading(false);
-  }, [code, userId, navigate]);
+  }, [accessToken, code, userId, navigate]);
 
   useEffect(() => {
     fetchGameState();

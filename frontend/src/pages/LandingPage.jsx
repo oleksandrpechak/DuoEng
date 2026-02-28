@@ -7,9 +7,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Swords, BookOpen, Users, Zap } from "lucide-react";
 import { toast } from "sonner";
-import axios from "axios";
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import api from "@/lib/api";
 
 export default function LandingPage() {
   const navigate = useNavigate();
@@ -27,11 +25,12 @@ export default function LandingPage() {
     }
 
     try {
-      const response = await axios.post(`${API}/auth/guest`, {
+      const response = await api.post("/auth/guest", {
         nickname: nickname.trim()
       });
       sessionStorage.setItem("userId", response.data.user_id);
       sessionStorage.setItem("nickname", response.data.nickname);
+      sessionStorage.setItem("accessToken", response.data.access_token);
       return response.data.user_id;
     } catch (error) {
       toast.error("Failed to create user");
@@ -48,8 +47,7 @@ export default function LandingPage() {
     }
 
     try {
-      const response = await axios.post(`${API}/rooms`, {
-        user_id: userId,
+      const response = await api.post("/rooms", {
         mode: mode,
         target_score: targetScore
       });
@@ -75,9 +73,7 @@ export default function LandingPage() {
     }
 
     try {
-      await axios.post(`${API}/rooms/${joinCode.toUpperCase()}/join`, {
-        user_id: userId
-      });
+      await api.post(`/rooms/${joinCode.toUpperCase()}/join`);
       toast.success("Joined room!");
       navigate(`/game/${joinCode.toUpperCase()}`);
     } catch (error) {

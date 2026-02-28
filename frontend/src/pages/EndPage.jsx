@@ -3,9 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Trophy, Medal, RotateCcw, Home, Loader2 } from "lucide-react";
-import axios from "axios";
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import api from "@/lib/api";
 
 export default function EndPage() {
   const navigate = useNavigate();
@@ -14,23 +12,22 @@ export default function EndPage() {
   const [isLoading, setIsLoading] = useState(true);
 
   const userId = sessionStorage.getItem("userId");
+  const accessToken = sessionStorage.getItem("accessToken");
 
   const fetchGameState = useCallback(async () => {
-    if (!userId) {
+    if (!userId || !accessToken) {
       navigate("/");
       return;
     }
 
     try {
-      const response = await axios.get(`${API}/rooms/${code}/state`, {
-        params: { user_id: userId }
-      });
+      const response = await api.get(`/rooms/${code}/state`);
       setGameState(response.data);
     } catch (error) {
       console.error("Failed to fetch game state");
     }
     setIsLoading(false);
-  }, [code, userId, navigate]);
+  }, [accessToken, code, userId, navigate]);
 
   useEffect(() => {
     fetchGameState();

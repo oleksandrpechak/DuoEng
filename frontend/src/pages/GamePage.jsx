@@ -5,9 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Clock, Trophy, CheckCircle2, XCircle, AlertCircle, Send, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import axios from "axios";
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import api from "@/lib/api";
 
 export default function GamePage() {
   const navigate = useNavigate();
@@ -19,17 +17,16 @@ export default function GamePage() {
   const inputRef = useRef(null);
 
   const userId = sessionStorage.getItem("userId");
+  const accessToken = sessionStorage.getItem("accessToken");
 
   const fetchGameState = useCallback(async () => {
-    if (!userId) {
+    if (!userId || !accessToken) {
       navigate("/");
       return;
     }
 
     try {
-      const response = await axios.get(`${API}/rooms/${code}/state`, {
-        params: { user_id: userId }
-      });
+      const response = await api.get(`/rooms/${code}/state`);
       setGameState(response.data);
 
       // Update last feedback
@@ -50,7 +47,7 @@ export default function GamePage() {
     } catch (error) {
       console.error("Failed to fetch game state", error);
     }
-  }, [code, userId, navigate]);
+  }, [accessToken, code, userId, navigate]);
 
   useEffect(() => {
     fetchGameState();
@@ -66,8 +63,7 @@ export default function GamePage() {
 
     setIsSubmitting(true);
     try {
-      const response = await axios.post(`${API}/rooms/${code}/turn`, {
-        user_id: userId,
+      const response = await api.post(`/rooms/${code}/turn`, {
         answer: answer.trim()
       });
 
@@ -78,6 +74,8 @@ export default function GamePage() {
         toast.success(`Correct! +${points} points`);
       } else if (feedback === "partial") {
         toast.info(`Partial match! +${points} point. Answer was: ${correct_answer}`);
+      } else if (feedback === "expired") {
+        toast.error(`Time expired! Correct answer: ${correct_answer}`);
       } else {
         toast.error(`Wrong! Correct answer: ${correct_answer}`);
       }
