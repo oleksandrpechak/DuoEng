@@ -30,9 +30,20 @@ def _resolve_database_url() -> str:
     if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
         raw = raw[1:-1].strip()
 
-    # Some platforms still provide postgres://; SQLAlchemy expects postgresql://
-    if raw.lower().startswith("postgres://"):
-        raw = f"postgresql://{raw.split('://', 1)[1]}"
+    if "://" not in raw:
+        return raw
+
+    scheme, suffix = raw.split("://", 1)
+    scheme = scheme.lower()
+    if scheme in {
+        "postgres",
+        "postgresql",
+        "postgresql+psycopg",
+        "postgresql+asyncpg",
+        "postgresql+pg8000",
+    }:
+        raw = f"postgresql+psycopg2://{suffix}"
+
     return raw
 
 

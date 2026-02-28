@@ -34,11 +34,22 @@ def _normalize_database_url(value: str | None, fallback: str) -> str:
     if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
         raw = raw[1:-1].strip()
 
-    # Render/Heroku-style URL; SQLAlchemy expects postgresql://
-    lower = raw.lower()
-    if lower.startswith("postgres://"):
-        suffix = raw.split("://", 1)[1]
-        return f"postgresql://{suffix}"
+    if "://" not in raw:
+        return raw
+
+    scheme, suffix = raw.split("://", 1)
+    scheme = scheme.lower()
+
+    # Force a driver we install in production image.
+    if scheme in {
+        "postgres",
+        "postgresql",
+        "postgresql+psycopg",
+        "postgresql+asyncpg",
+        "postgresql+pg8000",
+    }:
+        return f"postgresql+psycopg2://{suffix}"
+
     return raw
 
 
