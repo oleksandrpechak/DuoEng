@@ -52,7 +52,9 @@ http_rate_limiter = SlidingWindowLimiter()
 @app.on_event("startup")
 async def startup_event() -> None:
     check_db_connection()
-    init_db()
+    if settings.is_sqlite:
+        # Local dev fallback keeps sqlite bootstrap simple.
+        init_db()
     seeded = seed_sample_words_if_empty()
     clear_expired_llm_cache()
     logger.info(
@@ -61,6 +63,7 @@ async def startup_event() -> None:
             "event": "startup",
             "seeded_words": seeded,
             "db_backend": "sqlite" if settings.is_sqlite else "postgres",
+            "schema_bootstrap": "create_all" if settings.is_sqlite else "alembic",
         },
     )
 
