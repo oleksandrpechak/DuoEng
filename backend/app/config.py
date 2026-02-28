@@ -28,6 +28,14 @@ def _as_float(value: str | None, default: float) -> float:
         return default
 
 
+def _normalize_database_url(value: str | None, fallback: str) -> str:
+    raw = (value or fallback).strip() or fallback
+    # Render/Heroku-style URL; SQLAlchemy expects postgresql://
+    if raw.startswith("postgres://"):
+        return raw.replace("postgres://", "postgresql://", 1)
+    return raw
+
+
 @dataclass(frozen=True)
 class Settings:
     env: str
@@ -83,7 +91,10 @@ settings = Settings(
     jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
     jwt_exp_minutes=_as_int(os.getenv("JWT_EXP_MINUTES"), 60 * 12),
     port=_as_int(os.getenv("PORT"), 8000),
-    database_url=(os.getenv("DATABASE_URL", "sqlite:///./duoeng.db").strip() or "sqlite:///./duoeng.db"),
+    database_url=_normalize_database_url(
+        os.getenv("DATABASE_URL"),
+        "sqlite:///./duoeng.db",
+    ),
     db_pool_size=max(1, _as_int(os.getenv("DB_POOL_SIZE"), 5)),
     db_max_overflow=max(0, _as_int(os.getenv("DB_MAX_OVERFLOW"), 10)),
     db_pool_timeout=max(1, _as_int(os.getenv("DB_POOL_TIMEOUT"), 30)),
