@@ -29,7 +29,8 @@ api_router = APIRouter(prefix="/api")
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    filename='server.log'
 )
 logger = logging.getLogger(__name__)
 
@@ -731,3 +732,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+port = int(os.getenv("PORT", 8001))
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)
