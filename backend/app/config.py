@@ -30,9 +30,15 @@ def _as_float(value: str | None, default: float) -> float:
 
 def _normalize_database_url(value: str | None, fallback: str) -> str:
     raw = (value or fallback).strip() or fallback
+    # Some dashboards accidentally store quoted values.
+    if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
+        raw = raw[1:-1].strip()
+
     # Render/Heroku-style URL; SQLAlchemy expects postgresql://
-    if raw.startswith("postgres://"):
-        return raw.replace("postgres://", "postgresql://", 1)
+    lower = raw.lower()
+    if lower.startswith("postgres://"):
+        suffix = raw.split("://", 1)[1]
+        return f"postgresql://{suffix}"
     return raw
 
 

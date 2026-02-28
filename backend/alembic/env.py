@@ -27,9 +27,12 @@ def _resolve_database_url() -> str:
     if not raw:
         raise RuntimeError("DATABASE_URL is required for Alembic migrations")
 
+    if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
+        raw = raw[1:-1].strip()
+
     # Some platforms still provide postgres://; SQLAlchemy expects postgresql://
-    if raw.startswith("postgres://"):
-        raw = raw.replace("postgres://", "postgresql://", 1)
+    if raw.lower().startswith("postgres://"):
+        raw = f"postgresql://{raw.split('://', 1)[1]}"
     return raw
 
 
