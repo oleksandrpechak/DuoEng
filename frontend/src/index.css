@@ -50,24 +50,24 @@ code {
 
     .dark {
         --background: 220 22% 11%;
-        --foreground: 220 24% 92%;
+        --foreground: 0 0% 100%;
         --card: 222 19% 14%;
-        --card-foreground: 220 24% 92%;
+        --card-foreground: 0 0% 100%;
         --popover: 222 19% 14%;
-        --popover-foreground: 220 24% 92%;
+        --popover-foreground: 0 0% 100%;
         --primary: 214 74% 68%;
-        --primary-foreground: 220 25% 10%;
+        --primary-foreground: 0 0% 100%;
         --secondary: 336 56% 60%;
-        --secondary-foreground: 220 25% 10%;
+        --secondary-foreground: 0 0% 100%;
         --muted: 220 16% 18%;
-        --muted-foreground: 216 14% 72%;
+        --muted-foreground: 0 0% 100%;
         --accent: 156 48% 44%;
-        --accent-foreground: 220 25% 10%;
+        --accent-foreground: 0 0% 100%;
         --destructive: 6 79% 54%;
-        --destructive-foreground: 220 24% 92%;
+        --destructive-foreground: 0 0% 100%;
         --border: 220 14% 24%;
         --input: 220 14% 24%;
-        --ring: 214 74% 68%;
+        --ring: 0 0% 100%;
         --chart-1: 214 74% 68%;
         --chart-2: 156 48% 44%;
         --chart-3: 280 65% 66%;

@@ -41,6 +41,7 @@ def _resolve_database_url() -> str:
         "postgresql+psycopg",
         "postgresql+asyncpg",
         "postgresql+pg8000",
+        "postgresql+psycopg2",
     }:
         raw = f"postgresql+psycopg2://{suffix}"
 

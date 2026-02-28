@@ -259,7 +259,7 @@ export default function LandingPage() {
             <button
               data-testid="create-tab"
               className={`flex-1 py-2 px-4 rounded-full text-sm font-medium transition-all ${
-                activeTab === "create" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                activeTab === "create" ? "bg-white shadow-sm text-black" : "text-muted-foreground hover:text-foreground"
               }`}
               onClick={() => setActiveTab("create")}
             >
@@ -268,7 +268,7 @@ export default function LandingPage() {
             <button
               data-testid="join-tab"
               className={`flex-1 py-2 px-4 rounded-full text-sm font-medium transition-all ${
-                activeTab === "join" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                activeTab === "join" ? "bg-white shadow-sm text-black" : "text-muted-foreground hover:text-foreground"
               }`}
               onClick={() => setActiveTab("join")}
             >

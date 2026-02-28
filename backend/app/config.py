@@ -47,6 +47,7 @@ def _normalize_database_url(value: str | None, fallback: str) -> str:
         "postgresql+psycopg",
         "postgresql+asyncpg",
         "postgresql+pg8000",
+        "postgresql+psycopg2",
     }:
         return f"postgresql+psycopg2://{suffix}"
 
