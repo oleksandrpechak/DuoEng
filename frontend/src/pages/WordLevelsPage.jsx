@@ -1,17 +1,17 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
-import FilterButtons, { type WordLevelFilter } from "@/components/word-levels/FilterButtons";
+import FilterButtons from "@/components/word-levels/FilterButtons";
 import WordLevelItem from "@/components/word-levels/WordLevelItem";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { classifyWordLevels, type WordLevelItemData } from "@/lib/wordLevelsApi";
+import { classifyWordLevels } from "@/lib/wordLevelsApi";
 
-function parseWords(rawText: string): string[] {
+function parseWords(rawText) {
   return rawText
     .split(/[\n,]+/g)
     .map((word) => word.trim())
@@ -21,8 +21,8 @@ function parseWords(rawText: string): string[] {
 export default function WordLevelsPage() {
   const navigate = useNavigate();
   const [wordsInput, setWordsInput] = useState("");
-  const [results, setResults] = useState<WordLevelItemData[]>([]);
-  const [filter, setFilter] = useState<WordLevelFilter>("ALL");
+  const [results, setResults] = useState([]);
+  const [filter, setFilter] = useState("ALL");
   const [isLoading, setIsLoading] = useState(false);
 
   const filteredResults = useMemo(() => {
@@ -32,7 +32,7 @@ export default function WordLevelsPage() {
     return results.filter((item) => item.level === filter);
   }, [filter, results]);
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
     const words = parseWords(wordsInput);
     if (words.length === 0) {
@@ -45,14 +45,8 @@ export default function WordLevelsPage() {
       const response = await classifyWordLevels(words);
       setResults(response);
       setFilter("ALL");
-    } catch (error: unknown) {
-      const detail =
-        typeof error === "object" &&
-        error !== null &&
-        "response" in error &&
-        typeof (error as { response?: { data?: { detail?: string } } }).response?.data?.detail === "string"
-          ? (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
-          : "Failed to classify word levels.";
+    } catch (error) {
+      const detail = error?.response?.data?.detail || "Failed to classify word levels.";
       toast.error(detail);
     }
     setIsLoading(false);
@@ -71,9 +65,7 @@ export default function WordLevelsPage() {
         <Card className="rounded-2xl border border-border/80">
           <CardHeader>
             <CardTitle className="text-lg">Classify CEFR Levels</CardTitle>
-            <CardDescription>
-              Submit English words and get CEFR levels from Gemini.
-            </CardDescription>
+            <CardDescription>Submit English words and get CEFR levels from Gemini.</CardDescription>
           </CardHeader>
           <CardContent>
             <form className="space-y-3" onSubmit={handleSubmit}>
@@ -119,3 +111,4 @@ export default function WordLevelsPage() {
     </div>
   );
 }
+

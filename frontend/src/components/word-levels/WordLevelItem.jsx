@@ -1,10 +1,4 @@
-import type { WordLevelItemData } from "@/lib/wordLevelsApi";
-
-interface WordLevelItemProps {
-  item: WordLevelItemData;
-}
-
-export default function WordLevelItem({ item }: WordLevelItemProps) {
+export default function WordLevelItem({ item }) {
   return (
     <li className="flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3">
       <span className="text-sm font-medium text-foreground">{item.word}</span>

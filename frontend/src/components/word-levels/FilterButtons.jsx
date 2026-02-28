@@ -1,18 +1,6 @@
-import type { CEFRLevel } from "@/lib/wordLevelsApi";
+const FILTERS = ["ALL", "A2", "B1", "B2", "C1", "C2"];
 
-export type WordLevelFilter = "ALL" | "A2" | "B1" | "B2" | "C1" | "C2";
-
-const FILTERS: WordLevelFilter[] = ["ALL", "A2", "B1", "B2", "C1", "C2"];
-
-interface FilterButtonsProps {
-  activeFilter: WordLevelFilter;
-  onFilterChange: (filter: WordLevelFilter) => void;
-  disabled?: boolean;
-}
-
-const ALLOWED_LEVELS: CEFRLevel[] = ["A2", "B1", "B2", "C1", "C2"];
-
-export default function FilterButtons({ activeFilter, onFilterChange, disabled = false }: FilterButtonsProps) {
+export default function FilterButtons({ activeFilter, onFilterChange, disabled = false }) {
   return (
     <div className="flex flex-wrap gap-2" role="group" aria-label="Filter words by CEFR level">
       {FILTERS.map((filter) => {
@@ -34,9 +22,6 @@ export default function FilterButtons({ activeFilter, onFilterChange, disabled =
           </button>
         );
       })}
-      <span className="sr-only">
-        Available level filters: {ALLOWED_LEVELS.join(", ")}
-      </span>
     </div>
   );
 }
