@@ -29,7 +29,7 @@ def isolated_db(tmp_path: Path):
 
 def test_dictionary_search_requires_auth():
     client = TestClient(app)
-    response = client.get("/dictionary/search", params={"q": "tree"})
+    response = client.get("/api/dictionary/search", params={"q": "tree"})
     assert response.status_code == 401
 
 
@@ -60,7 +60,7 @@ def test_dictionary_search_returns_limited_results():
             ],
         )
 
-    response = client.get("/dictionary/search", params={"q": "tree"}, headers=headers)
+    response = client.get("/api/dictionary/search", params={"q": "tree"}, headers=headers)
     assert response.status_code == 200
 
     payload = response.json()
