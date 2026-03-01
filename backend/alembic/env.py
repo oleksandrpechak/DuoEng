@@ -8,13 +8,12 @@ import sys
 from alembic import context
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, pool
+from app.config import settings
+from app.models import Base
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
-
-from app.config import settings
-from app.models import Base
 
 load_dotenv()
 
@@ -23,7 +22,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-url = os.environ.get("DATABASE_URL") or str(settings.DATABASE_URL)
+url = os.environ.get("DATABASE_URL") or str(settings.database_url)
 
 if url and url.startswith("postgres://"):
     url = url.replace("postgres://", "postgresql://", 1)

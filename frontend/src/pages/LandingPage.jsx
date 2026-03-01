@@ -115,9 +115,14 @@ export default function LandingPage() {
     }
 
     try {
-      await api.post(`/rooms/${joinCode.toUpperCase()}/join`);
+      const response = await api.post(`/rooms/${joinCode.toUpperCase()}/join`);
       toast.success("Joined room!");
-      navigate(`/game/${joinCode.toUpperCase()}`);
+      const status = response.data.status;
+      if (status === "playing" || status === "finished") {
+        navigate(`/game/${joinCode.toUpperCase()}`);
+      } else {
+        navigate(`/lobby/${joinCode.toUpperCase()}`);
+      }
     } catch (error) {
       toast.error(error.response?.data?.detail || "Failed to join room");
     }
@@ -291,7 +296,7 @@ export default function LandingPage() {
                     <RadioGroupItem value="classic" id="classic" className="sr-only" />
                     <BookOpen className="w-6 h-6 mb-2 text-primary-foreground" />
                     <span className="font-medium text-sm">Classic</span>
-                    <span className="text-xs text-muted-foreground">No time limit</span>
+                    <span className="text-xs text-muted-foreground">Relaxed pace</span>
                   </Label>
                   <Label
                     htmlFor="challenge"

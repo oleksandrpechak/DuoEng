@@ -209,7 +209,6 @@ async def player_stats(player_id: str) -> PlayerStatsResponse:
     return PlayerStatsResponse(**stats)
 
 
-@app.get("/dictionary/search", response_model=list[DictionaryEntryItem])
 @api_router.get("/dictionary/search", response_model=list[DictionaryEntryItem])
 async def dictionary_search(
     q: str = Query(..., min_length=1, max_length=80),
@@ -271,7 +270,6 @@ async def metrics() -> Response:
 
 
 api_router.include_router(ai_router)
-app.include_router(ai_router)
 app.include_router(word_levels_router)
 app.include_router(api_router)
 

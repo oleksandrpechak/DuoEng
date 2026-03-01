@@ -41,7 +41,7 @@ class ConnectionManager:
             sockets = room.get(player_id)
             if sockets and websocket in sockets:
                 sockets.remove(websocket)
-            if sockets and not sockets:
+            if not sockets:
                 room.pop(player_id, None)
             if not room:
                 self._active_rooms.pop(room_code, None)

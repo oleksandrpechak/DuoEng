@@ -64,7 +64,9 @@ export default function EndPage() {
         <p className="text-muted-foreground text-lg">
           {isWinner 
             ? "Congratulations, you won the duel!" 
-            : `${gameState.winner?.nickname} won this round`
+            : gameState.winner?.nickname
+              ? `${gameState.winner.nickname} won this round`
+              : "Better luck next time!"
           }
         </p>
       </div>

@@ -39,6 +39,11 @@ export default function GamePage() {
         navigate(`/end/${code}`);
       }
 
+      // If still waiting, go back to lobby
+      if (response.data.status === "waiting") {
+        navigate(`/lobby/${code}`);
+      }
+
       // If it's our turn, focus input
       const myPlayer = response.data.players.find(p => p.user_id === userId);
       if (myPlayer?.is_current_turn && inputRef.current) {
@@ -170,8 +175,8 @@ export default function GamePage() {
           </CardContent>
         </Card>
 
-        {/* Timer (Challenge Mode) */}
-        {gameState.mode === "challenge" && gameState.current_turn && (
+        {/* Timer */}
+        {gameState.current_turn && gameState.current_turn.time_remaining != null && (
           <div className="text-center mb-4" data-testid="timer">
             <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${
               gameState.current_turn.time_remaining <= 10 

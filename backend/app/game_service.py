@@ -803,12 +803,14 @@ class GameService:
             room = self._fetch_room(session, normalized_code)
             players_rows = self._fetch_room_players(session, normalized_code)
 
-            winner_row = self._one(
-                session,
-                "SELECT winner_id FROM matches WHERE id = :match_id",
-                {"match_id": room["match_id"]},
-            )
-            winner_id = winner_row["winner_id"] if winner_row else None
+            winner_id = None
+            if room["match_id"]:
+                winner_row = self._one(
+                    session,
+                    "SELECT winner_id FROM matches WHERE id = :match_id",
+                    {"match_id": room["match_id"]},
+                )
+                winner_id = winner_row["winner_id"] if winner_row else None
 
             winner_payload = None
             if winner_id:
@@ -878,6 +880,13 @@ class GameService:
                     "current_player_id": room["current_turn"],
                 }
 
+            raw_turn_started = room["turn_started_at"]
+            turn_started_str = (
+                raw_turn_started.isoformat()
+                if isinstance(raw_turn_started, datetime)
+                else raw_turn_started
+            )
+
             return {
                 "room_code": normalized_code,
                 "code": normalized_code,
@@ -889,7 +898,7 @@ class GameService:
                 "players": players,
                 "current_word_ua": visible_word,
                 "current_turn_player_id": room["current_turn"],
-                "turn_started_at": room["turn_started_at"],
+                "turn_started_at": turn_started_str,
                 "match_id": room["match_id"],
                 "winner_id": winner_id,
                 "current_turn": current_turn,

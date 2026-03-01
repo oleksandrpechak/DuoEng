@@ -29,6 +29,10 @@ export default function LobbyPage() {
       if (response.data.status === "playing") {
         navigate(`/game/${code}`);
       }
+      // If game somehow already finished, go to end
+      if (response.data.status === "finished") {
+        navigate(`/end/${code}`);
+      }
     } catch (error) {
       toast.error("Failed to fetch room state");
       navigate("/");
