@@ -5,17 +5,21 @@ import os
 from pathlib import Path
 import sys
 
-from alembic import context
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, pool
-from app.config import settings
-from app.models import Base
-
+# Ensure the backend root (parent of alembic/) is on sys.path so that
+# ``from app.…`` imports resolve when Alembic is invoked standalone
+# (e.g. during Render deploy).
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
-    sys.path.append(str(ROOT_DIR))
+    sys.path.insert(0, str(ROOT_DIR))
+
+from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
+
+from alembic import context  # noqa: E402
+from sqlalchemy import create_engine, pool  # noqa: E402
+from app.config import settings  # noqa: E402
+from app.models import Base  # noqa: E402
 
 config = context.config
 
