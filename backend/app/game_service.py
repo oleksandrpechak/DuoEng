@@ -121,6 +121,10 @@ class GameService:
 
         is_admin = final_name.lower() in settings.admin_nicknames
         token = create_access_token(player_id=player_id, nickname=final_name, is_admin=is_admin)
+        logger.info(
+            "Guest auth success",
+            extra={"event": "auth_success", "player_id": player_id, "nickname": final_name},
+        )
         return {
             "user_id": player_id,
             "player_id": player_id,

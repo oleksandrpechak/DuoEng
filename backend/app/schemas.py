@@ -118,7 +118,7 @@ class AdminSeedRequest(BaseModel):
 class AIGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    prompt: str = Field(min_length=1, max_length=4000)
+    prompt: str = Field(min_length=1, max_length=2000)
 
 
 class AIGenerateResponse(BaseModel):

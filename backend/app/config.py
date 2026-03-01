@@ -49,7 +49,12 @@ def _normalize_database_url(value: str | None, fallback: str) -> str:
         "postgresql+pg8000",
         "postgresql+psycopg2",
     }:
-        return f"postgresql+psycopg2://{suffix}"
+        url = f"postgresql+psycopg2://{suffix}"
+        # Append sslmode=require for encrypted DB connections (production safety).
+        if "sslmode" not in url:
+            separator = "&" if "?" in url else "?"
+            url = f"{url}{separator}sslmode=require"
+        return url
 
     return raw
 
@@ -67,6 +72,8 @@ class Settings:
     db_pool_timeout: int
     db_pool_recycle: int
     cors_origins: list[str]
+    frontend_url: str
+    debug: bool
     turn_timeout_seconds: int
     room_code_length: int
     room_code_attempts: int
@@ -102,10 +109,25 @@ class Settings:
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
 
+    @property
+    def is_production(self) -> bool:
+        return self.env.lower() not in {"development", "dev", "test", "testing"}
+
+    def validate(self) -> None:
+        """Raise early on dangerous mis-configurations in non-dev environments."""
+        if self.is_production and self.secret_key == _DEFAULT_SECRET_KEY:
+            raise RuntimeError(
+                "SECRET_KEY must be explicitly set in production. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+            )
+
+
+_DEFAULT_SECRET_KEY = "change-me-in-production-min-32-bytes-key"
+
 
 settings = Settings(
     env=os.getenv("ENV", "development"),
-    secret_key=os.getenv("SECRET_KEY", "change-me-in-production-min-32-bytes-key"),
+    secret_key=os.getenv("SECRET_KEY", _DEFAULT_SECRET_KEY),
     jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
     jwt_exp_minutes=_as_int(os.getenv("JWT_EXP_MINUTES"), 60 * 12),
     port=_as_int(os.getenv("PORT"), 8000),
@@ -119,9 +141,11 @@ settings = Settings(
     db_pool_recycle=max(60, _as_int(os.getenv("DB_POOL_RECYCLE"), 1800)),
     cors_origins=[
         origin.strip()
-        for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+        for origin in os.getenv("CORS_ORIGINS", os.getenv("FRONTEND_URL", "http://localhost:3000")).split(",")
         if origin.strip()
     ],
+    frontend_url=os.getenv("FRONTEND_URL", "http://localhost:3000").strip(),
+    debug=_as_bool(os.getenv("DEBUG"), False),
     turn_timeout_seconds=_as_int(os.getenv("TURN_TIMEOUT_SECONDS"), 30),
     room_code_length=max(8, _as_int(os.getenv("ROOM_CODE_LENGTH"), 8)),
     room_code_attempts=max(3, _as_int(os.getenv("ROOM_CODE_ATTEMPTS"), 12)),
@@ -162,3 +186,5 @@ settings = Settings(
     word_level_max_words=max(1, _as_int(os.getenv("WORD_LEVEL_MAX_WORDS"), 200)),
     log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
 )
+
+settings.validate()

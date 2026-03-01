@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..schemas import AIGenerateRequest, AIGenerateResponse
+from ..security import AuthContext, auth_context_from_header
 from ..services.gemini_service import (
     GeminiConfigurationError,
     GeminiServiceError,
@@ -17,8 +18,12 @@ logger = logging.getLogger("duoeng.ai")
 
 
 @router.post("/generate", response_model=AIGenerateResponse)
-async def generate_ai_text(payload: AIGenerateRequest) -> AIGenerateResponse:
+async def generate_ai_text(
+    payload: AIGenerateRequest,
+    auth: AuthContext = Depends(auth_context_from_header),
+) -> AIGenerateResponse:
     """Generate text using Gemini 2.0 Flash through Vertex AI (ADC)."""
+    _ = auth  # Authenticated access only
 
     try:
         generated = await generate_text(payload.prompt)

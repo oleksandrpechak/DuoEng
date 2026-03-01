@@ -40,7 +40,19 @@ load_dotenv()
 configure_logging()
 logger = logging.getLogger("duoeng.app")
 
-app = FastAPI(title="DuoEng API", version="2.0.0")
+# ---------------------------------------------------------------------------
+# Request body size limit (bytes).  1 MB should be more than enough for
+# any legitimate payload this API accepts.
+# ---------------------------------------------------------------------------
+MAX_REQUEST_BODY_BYTES = 1 * 1024 * 1024  # 1 MB
+
+app = FastAPI(
+    title="DuoEng API",
+    version="2.0.0",
+    # Disable auto-generated docs in production to reduce attack surface.
+    docs_url="/docs" if not settings.is_production else None,
+    redoc_url="/redoc" if not settings.is_production else None,
+)
 api_router = APIRouter(prefix="/api")
 
 scorer = LLMScorer()
@@ -72,9 +84,47 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Security headers middleware – adds defence-in-depth headers to every
+# HTTP response.  WebSocket upgrade responses are excluded automatically
+# because Starlette/ASGI doesn't call ASGI middleware for them.
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if settings.is_production:
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Global exception handler – ensures internal details never leak to clients.
+# ---------------------------------------------------------------------------
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception):
+    # HTTPExceptions are already handled by FastAPI; this catches unexpected errors.
+    logger.error(
+        "Unhandled exception",
+        extra={
+            "event": "unhandled_exception",
+            "path": request.url.path,
+            "reason": f"{exc.__class__.__name__}: {exc}",
+        },
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 
 def _client_ip_from_request(request: Request) -> str:
@@ -95,7 +145,16 @@ async def request_guard_middleware(request: Request, call_next):
     method = request.method
     ip = _client_ip_from_request(request)
 
+    # ── Request body size guard ──
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_REQUEST_BODY_BYTES:
+        return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+
     if not http_rate_limiter.allow(f"http:{ip}", settings.rate_limit_requests_per_min, 60):
+        logger.warning(
+            "HTTP rate limit exceeded",
+            extra={"event": "rate_limit_hit", "ip": ip, "path": path},
+        )
         response = JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
         REQUESTS_TOTAL.labels(method=method, path=path, status="429").inc()
         return response
@@ -204,7 +263,10 @@ async def leaderboard(limit: int = Query(default=20, ge=1, le=100)) -> list[Lead
 
 
 @api_router.get("/players/{player_id}/stats", response_model=PlayerStatsResponse)
-async def player_stats(player_id: str) -> PlayerStatsResponse:
+async def player_stats(
+    player_id: str,
+    auth: AuthContext = Depends(_auth_user_from_header),
+) -> PlayerStatsResponse:
     stats = service.player_stats(player_id)
     return PlayerStatsResponse(**stats)
 
@@ -263,9 +325,11 @@ async def healthcheck() -> dict[str, str]:
 
 
 @app.get("/metrics")
-async def metrics() -> Response:
+async def metrics(auth: AuthContext = Depends(_auth_user_from_header)) -> Response:
     if not settings.enable_prometheus_metrics:
         raise HTTPException(status_code=404, detail="Metrics disabled")
+    if not auth.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -303,6 +367,10 @@ async def websocket_room(websocket: WebSocket, room_code: str) -> None:
         # Validate membership before accepting active stream.
         initial_state = service.room_state_for_player(room_code, auth.player_id, ip=ip)
     except HTTPException:
+        logger.warning(
+            "WS auth rejected",
+            extra={"event": "ws_auth_rejected", "ip": ip, "room_code": room_code},
+        )
         await websocket.close(code=4401)
         return
 
@@ -315,6 +383,10 @@ async def websocket_room(websocket: WebSocket, room_code: str) -> None:
 
     await ws_manager.connect(room_code.upper(), auth.player_id, websocket, subprotocol=accepted_subprotocol)
 
+    # Per-connection burst rate limiter (10 messages / second sliding window).
+    _ws_burst_limiter = SlidingWindowLimiter()
+    _ws_burst_key = f"ws_burst:{room_code.upper()}:{auth.player_id}"
+
     try:
         await websocket.send_json({"type": "connected", "room_code": room_code.upper()})
         await websocket.send_json({"type": "game_state", "data": initial_state})
@@ -326,6 +398,28 @@ async def websocket_room(websocket: WebSocket, room_code: str) -> None:
                 await websocket.send_json({"type": "ping", "ts": datetime.now(timezone.utc).isoformat()})
                 continue
 
+            # ── Re-validate JWT on every incoming message ──
+            try:
+                auth = decode_token(token)
+            except HTTPException:
+                logger.warning(
+                    "WS token invalid mid-session",
+                    extra={"event": "ws_token_expired", "ip": ip, "player_id": auth.player_id},
+                )
+                await websocket.send_json({"type": "error", "detail": "Token expired"})
+                await websocket.close(code=4401)
+                return
+
+            # ── Per-connection burst guard (10 msg/sec) ──
+            if not _ws_burst_limiter.allow(_ws_burst_key, max_events=10, period_seconds=1):
+                logger.warning(
+                    "WS burst rate limit triggered",
+                    extra={"event": "ws_burst_limit", "ip": ip, "player_id": auth.player_id},
+                )
+                await websocket.send_json({"type": "error", "detail": "Message rate limit exceeded"})
+                await websocket.close(code=4429)
+                return
+
             msg_type = (message.get("type") or "").lower()
             if msg_type == "ping":
                 await websocket.send_json({"type": "pong", "ts": datetime.now(timezone.utc).isoformat()})
@@ -336,10 +430,14 @@ async def websocket_room(websocket: WebSocket, room_code: str) -> None:
                 continue
 
             if not service.ws_message_allowed(room_code, auth.player_id):
+                logger.warning(
+                    "WS rate limit hit",
+                    extra={"event": "ws_rate_limit", "ip": ip, "player_id": auth.player_id},
+                )
                 await websocket.send_json({"type": "error", "detail": "WebSocket rate limit exceeded"})
                 continue
 
-            answer = str(message.get("answer", "")).strip()
+            answer = str(message.get("answer", "")).strip()[:256]
             if not answer:
                 await websocket.send_json({"type": "error", "detail": "Answer is required"})
                 continue

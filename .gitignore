@@ -25,6 +25,9 @@ frontend/build/
 .env
 .env.local
 frontend/.env.local
+!.env.example
+!frontend/.env.example
+!backend/.env.example
 
 #private key
 *.json

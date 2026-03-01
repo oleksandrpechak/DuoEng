@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..schemas import WordLevelItem, WordLevelsRequest
+from ..security import AuthContext, auth_context_from_header
 from ..services.gemini_service import (
     GeminiConfigurationError,
     GeminiServiceError,
@@ -40,8 +41,12 @@ logger = logging.getLogger("duoeng.words")
         504: {"description": "Gemini request timed out"},
     },
 )
-async def classify_word_levels(payload: WordLevelsRequest) -> list[WordLevelItem]:
+async def classify_word_levels(
+    payload: WordLevelsRequest,
+    auth: AuthContext = Depends(auth_context_from_header),
+) -> list[WordLevelItem]:
     """Classify each word in the request into a CEFR level."""
+    _ = auth  # Authenticated access only
 
     try:
         result = await classify_words_cefr(payload.words)

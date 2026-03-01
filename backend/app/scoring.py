@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import logging
+import re
 from typing import Optional
 
 try:
@@ -47,6 +48,19 @@ class LLMScorer:
 
     def _normalize(self, text: str) -> str:
         return " ".join(text.lower().strip().split())
+
+    @staticmethod
+    def _sanitize_for_llm(text: str, max_length: int = 200) -> str:
+        """Strip dangerous patterns before embedding user text in an LLM prompt."""
+        sanitized = text.strip()[:max_length]
+        # Remove backticks, angle-brackets, common injection prefixes
+        sanitized = re.sub(r"[`<>]", "", sanitized)
+        _injection_patterns = re.compile(
+            r"(ignore\s+(all\s+)?previous\s+instructions|system\s*:|assistant\s*:|<\|im_start\|>)",
+            re.IGNORECASE,
+        )
+        sanitized = _injection_patterns.sub("", sanitized)
+        return sanitized.strip()
 
     def _cache_key(self, correct_answer: str, user_answer: str) -> str:
         normalized = f"{self._normalize(correct_answer)}::{self._normalize(user_answer)}"
@@ -140,14 +154,22 @@ class LLMScorer:
         if aiohttp is None:
             return None
 
+        safe_correct = self._sanitize_for_llm(correct_answer)
+        safe_user = self._sanitize_for_llm(user_answer)
+
         payload = {
             "prompt": (
-                "Score translation quality from 0 to 2. "
+                "You are a translation quality scorer. "
+                "Score the user's translation from 0 to 2. "
                 "0=wrong, 1=partial, 2=correct. "
-                f"Correct answer: {correct_answer}. User answer: {user_answer}."
+                "Respond with ONLY a JSON object: {\"score\": N}\n"
+                "---\n"
+                f"Correct answer: \"{safe_correct}\"\n"
+                f"User answer: \"{safe_user}\"\n"
+                "---"
             ),
-            "correct_answer": correct_answer,
-            "user_answer": user_answer,
+            "correct_answer": safe_correct,
+            "user_answer": safe_user,
         }
         headers = {}
         if settings.llm_api_key:
@@ -193,7 +215,17 @@ class LLMScorer:
             self._store_cached(key, quick)
             return quick
 
-        llm_result = await self._call_llm(correct_answer, user_answer)
+        # Hard deadline: never let LLM block game flow longer than configured timeout + 1s.
+        try:
+            llm_result = await asyncio.wait_for(
+                self._call_llm(correct_answer, user_answer),
+                timeout=settings.llm_timeout + 1.0,
+            )
+        except asyncio.TimeoutError:
+            LLM_TIMEOUTS_TOTAL.inc()
+            logger.warning("LLM hard timeout in score()", extra={"event": "llm_hard_timeout"})
+            llm_result = None
+
         if llm_result:
             self._store_cached(key, llm_result)
             return llm_result
