@@ -16,44 +16,19 @@ if str(ROOT_DIR) not in sys.path:
 from app.config import settings
 from app.models import Base
 
-
 load_dotenv()
 
 config = context.config
 
-
-def _resolve_database_url() -> str:
-    raw = (os.getenv("DATABASE_URL") or settings.database_url or "").strip()
-    if not raw:
-        raise RuntimeError("DATABASE_URL is required for Alembic migrations")
-
-    if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
-        raw = raw[1:-1].strip()
-
-    if "://" not in raw:
-        return raw
-
-    scheme, suffix = raw.split("://", 1)
-    scheme = scheme.lower()
-    if scheme in {
-        "postgres",
-        "postgresql",
-        "postgresql+psycopg",
-        "postgresql+asyncpg",
-        "postgresql+pg8000",
-        "postgresql+psycopg2",
-    }:
-        raw = f"postgresql+psycopg2://{suffix}"
-
-    return raw
-
-
-database_url = _resolve_database_url()
-# Alembic config parser treats `%` as interpolation marker.
-config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
-
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+url = os.environ.get("DATABASE_URL") or str(settings.DATABASE_URL)
+
+if url and url.startswith("postgres://"):
+    url = url.replace("postgres://", "postgresql://", 1)
+
+config.set_main_option("sqlalchemy.url", url)
 
 target_metadata = Base.metadata
 
