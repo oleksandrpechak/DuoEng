@@ -27,21 +27,29 @@ def isolated_db(tmp_path: Path):
         reset_database_engine(original_db_url)
 
 
+def _auth_headers(client: TestClient) -> dict[str, str]:
+    resp = client.post("/api/auth/guest", json={"nickname": "AITestUser"})
+    token = resp.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_ai_generate_prompt_validation():
     client = TestClient(app)
-    response = client.post("/api/ai/generate", json={"prompt": ""})
+    headers = _auth_headers(client)
+    response = client.post("/api/ai/generate", json={"prompt": ""}, headers=headers)
     assert response.status_code == 422
 
 
 def test_ai_generate_success(monkeypatch):
     client = TestClient(app)
+    headers = _auth_headers(client)
 
     async def fake_generate(prompt: str) -> str:
         return f"generated:{prompt}"
 
     monkeypatch.setattr("app.routers.ai.generate_text", fake_generate)
 
-    response = client.post("/api/ai/generate", json={"prompt": "Write a sentence"})
+    response = client.post("/api/ai/generate", json={"prompt": "Write a sentence"}, headers=headers)
     assert response.status_code == 200
     payload = response.json()
     assert payload["result"] == "generated:Write a sentence"
@@ -49,12 +57,13 @@ def test_ai_generate_success(monkeypatch):
 
 def test_ai_generate_direct_route(monkeypatch):
     client = TestClient(app)
+    headers = _auth_headers(client)
 
     async def fake_generate(prompt: str) -> str:
         return f"ok:{prompt}"
 
     monkeypatch.setattr("app.routers.ai.generate_text", fake_generate)
-    response = client.post("/ai/generate", json={"prompt": "ping"})
+    response = client.post("/api/ai/generate", json={"prompt": "ping"}, headers=headers)
 
     assert response.status_code == 200
     assert response.json() == {"result": "ok:ping"}
@@ -62,12 +71,13 @@ def test_ai_generate_direct_route(monkeypatch):
 
 def test_ai_generate_timeout(monkeypatch):
     client = TestClient(app)
+    headers = _auth_headers(client)
 
     async def fake_timeout(_prompt: str) -> str:
         raise GeminiServiceTimeoutError("timeout")
 
     monkeypatch.setattr("app.routers.ai.generate_text", fake_timeout)
-    response = client.post("/api/ai/generate", json={"prompt": "hello"})
+    response = client.post("/api/ai/generate", json={"prompt": "hello"}, headers=headers)
 
     assert response.status_code == 504
     assert response.json()["detail"] == "AI generation timed out"
@@ -75,12 +85,13 @@ def test_ai_generate_timeout(monkeypatch):
 
 def test_ai_generate_configuration_error(monkeypatch):
     client = TestClient(app)
+    headers = _auth_headers(client)
 
     async def fake_config_error(_prompt: str) -> str:
         raise GeminiConfigurationError("missing project")
 
     monkeypatch.setattr("app.routers.ai.generate_text", fake_config_error)
-    response = client.post("/api/ai/generate", json={"prompt": "hello"})
+    response = client.post("/api/ai/generate", json={"prompt": "hello"}, headers=headers)
 
     assert response.status_code == 503
     assert response.json()["detail"] == "AI service is not configured"
