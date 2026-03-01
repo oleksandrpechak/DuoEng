@@ -59,6 +59,51 @@ def _normalize_database_url(value: str | None, fallback: str) -> str:
     return raw
 
 
+def _build_cors_origins() -> list[str]:
+    """Build CORS origins list with auto-detection for Render deployments.
+
+    Priority:
+      1. Explicit CORS_ORIGINS env var (comma-separated)
+      2. FRONTEND_URL env var
+      3. Auto-detect Render service name from RENDER_SERVICE_NAME or
+         RENDER_EXTERNAL_HOSTNAME and derive the frontend origin.
+      4. Fallback to http://localhost:3000 for local development.
+    """
+    raw = os.getenv("CORS_ORIGINS", "").strip()
+    if raw:
+        origins = [o.strip() for o in raw.split(",") if o.strip()]
+    else:
+        frontend_url = os.getenv("FRONTEND_URL", "").strip()
+        if frontend_url:
+            origins = [frontend_url]
+        else:
+            origins = ["http://localhost:3000"]
+
+    # Auto-add Render frontend origin if running on Render and not already present.
+    render_hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME", "").strip()
+    if render_hostname and render_hostname.endswith(".onrender.com"):
+        # e.g. duoeng-backend.onrender.com → duoeng-frontend.onrender.com
+        frontend_host = render_hostname.replace("-backend", "-frontend")
+        render_frontend = f"https://{frontend_host}"
+        if render_frontend not in origins:
+            origins.append(render_frontend)
+
+        # Also allow the backend's own origin (for same-origin testing)
+        render_self = f"https://{render_hostname}"
+        if render_self not in origins:
+            origins.append(render_self)
+
+    # Always include the hardcoded Render URLs for this project
+    for known_origin in [
+        "https://duoeng-frontend.onrender.com",
+        "https://duoeng-backend.onrender.com",
+    ]:
+        if known_origin not in origins:
+            origins.append(known_origin)
+
+    return origins
+
+
 @dataclass(frozen=True)
 class Settings:
     env: str
@@ -139,11 +184,7 @@ settings = Settings(
     db_max_overflow=max(0, _as_int(os.getenv("DB_MAX_OVERFLOW"), 10)),
     db_pool_timeout=max(1, _as_int(os.getenv("DB_POOL_TIMEOUT"), 30)),
     db_pool_recycle=max(60, _as_int(os.getenv("DB_POOL_RECYCLE"), 1800)),
-    cors_origins=[
-        origin.strip()
-        for origin in os.getenv("CORS_ORIGINS", os.getenv("FRONTEND_URL", "http://localhost:3000")).split(",")
-        if origin.strip()
-    ],
+    cors_origins=_build_cors_origins(),
     frontend_url=os.getenv("FRONTEND_URL", "http://localhost:3000").strip(),
     debug=_as_bool(os.getenv("DEBUG"), False),
     turn_timeout_seconds=_as_int(os.getenv("TURN_TIMEOUT_SECONDS"), 30),
