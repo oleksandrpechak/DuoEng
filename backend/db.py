@@ -212,11 +212,11 @@ def seed_from_csv(force: bool = False) -> int:
         else "INSERT INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level) ON CONFLICT (id) DO NOTHING"
     )
     dict_sql = (
-        "INSERT OR IGNORE INTO dictionary_entries (ua_word, en_word, part_of_speech, source) "
-        "VALUES (:ua_word, :en_word, :part_of_speech, :source)"
+        "INSERT OR IGNORE INTO dictionary_entries (ua_word, en_word, part_of_speech, source, created_at) "
+        "VALUES (:ua_word, :en_word, :part_of_speech, :source, :created_at)"
         if is_sqlite
-        else "INSERT INTO dictionary_entries (ua_word, en_word, part_of_speech, source) "
-        "VALUES (:ua_word, :en_word, :part_of_speech, :source) ON CONFLICT (ua_word, en_word) DO NOTHING"
+        else "INSERT INTO dictionary_entries (ua_word, en_word, part_of_speech, source, created_at) "
+        "VALUES (:ua_word, :en_word, :part_of_speech, :source, :created_at) ON CONFLICT (ua_word, en_word) DO NOTHING"
     )
 
     inserted_words = 0
@@ -299,6 +299,7 @@ def seed_from_csv(force: bool = False) -> int:
                         "en_word": en.lower(),
                         "part_of_speech": pos or None,
                         "source": source.lower(),
+                        "created_at": _utc_now(),
                     })
 
                     # words table — unique en words
@@ -361,6 +362,7 @@ def seed_from_csv(force: bool = False) -> int:
                         "en_word": en.lower(),
                         "part_of_speech": pos or None,
                         "source": source.lower(),
+                        "created_at": _utc_now(),
                     })
 
                     word_id = _make_word_id(en)
