@@ -90,6 +90,7 @@ export default function LandingPage() {
   const [historyData, setHistoryData] = useState(null);
   const [historyPage, setHistoryPage] = useState(1);
   const [platformStats, setPlatformStats] = useState(null);
+  const [isSignedIn, setIsSignedIn] = useState(() => !!sessionStorage.getItem("accessToken"));
 
   // Fetch public stats (no auth needed) with sessionStorage cache
   useEffect(() => {
@@ -137,6 +138,7 @@ export default function LandingPage() {
       sessionStorage.setItem("userId", userId);
       sessionStorage.setItem("nickname", nick);
       setNickname(nick);
+      setIsSignedIn(true);
       toast.success(`Signed in as ${nick}`);
       // Clean URL
       window.history.replaceState({}, document.title, "/");
@@ -156,6 +158,7 @@ export default function LandingPage() {
       sessionStorage.setItem("userId", response.data.user_id);
       sessionStorage.setItem("nickname", response.data.nickname);
       sessionStorage.setItem("accessToken", response.data.access_token);
+      setIsSignedIn(true);
       return response.data.user_id;
     } catch (error) {
       toast.error("Failed to create user");
@@ -319,8 +322,6 @@ export default function LandingPage() {
       await loadHistory(1);
     }
   };
-
-  const isSignedIn = !!sessionStorage.getItem("accessToken");
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">

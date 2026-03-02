@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import csv
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import logging
+import os
+from pathlib import Path
 import sqlite3
 from typing import Iterator
 
@@ -10,6 +14,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.models import Base
+
+logger = logging.getLogger("duoeng.db")
 
 
 def _utc_now() -> datetime:
@@ -91,7 +97,188 @@ def init_db() -> None:
     Base.metadata.create_all(bind=_ENGINE)
 
 
+# ---------------------------------------------------------------------------
+# CSV Dictionary Seeder
+# ---------------------------------------------------------------------------
+
+def _find_csv_path() -> str | None:
+    """Locate dictionary_clean.csv by checking common locations."""
+    candidates = [
+        Path(__file__).parent / "data" / "processed" / "dictionary_clean.csv",
+        Path(__file__).parent / "seeds" / "dictionary_clean.csv",
+        Path(__file__).parent / "dictionary_clean.csv",
+        Path(__file__).parent.parent / "data" / "processed" / "dictionary_clean.csv",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def seed_from_csv_if_empty(csv_path: str | None = None) -> int:
+    """Seed the words + dictionary_entries tables from dictionary_clean.csv.
+
+    Only seeds if the words table has ≤10 rows (sample data or empty).
+    Returns the number of word-pairs inserted into the words table.
+
+    The CSV has columns: ua_word, en_word, part_of_speech, source
+    """
+    if csv_path is None:
+        csv_path = _find_csv_path()
+
+    if not csv_path or not Path(csv_path).exists():
+        logger.warning("dictionary_clean.csv not found, skipping CSV seed")
+        return 0
+
+    with get_db() as session:
+        existing_words = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
+        if existing_words > 10 and os.environ.get("FORCE_RESEED") != "1":
+            logger.info(
+                "Words table already has %d rows, skipping CSV seed",
+                existing_words,
+            )
+            return 0
+
+    # If FORCE_RESEED, clear existing data first
+    if os.environ.get("FORCE_RESEED") == "1":
+        logger.info("FORCE_RESEED=1 detected, clearing words and dictionary_entries tables")
+        with get_db() as session:
+            session.execute(text("DELETE FROM words"))
+            session.execute(text("DELETE FROM dictionary_entries"))
+
+    # Determine DB dialect for conflict handling
+    is_sqlite = settings.database_url.startswith("sqlite")
+
+    # Read CSV and collect unique word-pairs for the words table.
+    # We'll assign CEFR levels based on word frequency / position in CSV as a rough proxy,
+    # or default to B1. For dictionary_entries we insert all rows.
+    words_inserted = 0
+    dict_inserted = 0
+    seen_word_ids: set[str] = set()
+    batch_words: list[dict] = []
+    batch_dict: list[dict] = []
+    BATCH_SIZE = 1000
+
+    # Simple heuristic for CEFR level assignment for words not already leveled
+    # (the CSV doesn't have levels, so we default to B1)
+    DEFAULT_LEVEL = "B1"
+
+    def flush_batches(session: Session, w_batch: list[dict], d_batch: list[dict]) -> tuple[int, int]:
+        w_count = 0
+        d_count = 0
+
+        if w_batch:
+            if is_sqlite:
+                session.execute(
+                    text(
+                        "INSERT OR IGNORE INTO words (id, ua, en, level) "
+                        "VALUES (:id, :ua, :en, :level)"
+                    ),
+                    w_batch,
+                )
+            else:
+                session.execute(
+                    text(
+                        "INSERT INTO words (id, ua, en, level) "
+                        "VALUES (:id, :ua, :en, :level) "
+                        "ON CONFLICT (id) DO NOTHING"
+                    ),
+                    w_batch,
+                )
+            w_count = len(w_batch)
+
+        if d_batch:
+            if is_sqlite:
+                session.execute(
+                    text(
+                        "INSERT OR IGNORE INTO dictionary_entries (ua_word, en_word, part_of_speech, source) "
+                        "VALUES (:ua_word, :en_word, :part_of_speech, :source)"
+                    ),
+                    d_batch,
+                )
+            else:
+                session.execute(
+                    text(
+                        "INSERT INTO dictionary_entries (ua_word, en_word, part_of_speech, source) "
+                        "VALUES (:ua_word, :en_word, :part_of_speech, :source) "
+                        "ON CONFLICT (ua_word, en_word) DO NOTHING"
+                    ),
+                    d_batch,
+                )
+            d_count = len(d_batch)
+
+        return w_count, d_count
+
+    logger.info("Starting CSV seed from %s", csv_path)
+
+    with open(csv_path, encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        with get_db() as session:
+            for row in reader:
+                ua = (row.get("ua_word") or row.get("ua") or row.get("ukrainian") or "").strip()
+                en = (row.get("en_word") or row.get("en") or row.get("english") or "").strip()
+                pos = (row.get("part_of_speech") or row.get("pos") or "").strip()
+                source = (row.get("source") or "csv").strip()
+
+                if not en or not ua:
+                    continue
+
+                # Skip very long entries (likely definitions, not words)
+                if len(en) > 60 or len(ua) > 80:
+                    continue
+
+                # Insert into dictionary_entries (all rows)
+                batch_dict.append({
+                    "ua_word": ua.lower(),
+                    "en_word": en.lower(),
+                    "part_of_speech": pos.lower() if pos else None,
+                    "source": source.lower(),
+                })
+
+                # Insert into words table (unique en words only)
+                word_id = en.lower().replace(" ", "_").replace("'", "")[:64]
+                if word_id and word_id not in seen_word_ids:
+                    seen_word_ids.add(word_id)
+                    batch_words.append({
+                        "id": word_id,
+                        "ua": ua,
+                        "en": en,
+                        "level": DEFAULT_LEVEL,
+                    })
+
+                if len(batch_dict) >= BATCH_SIZE:
+                    wc, dc = flush_batches(session, batch_words, batch_dict)
+                    words_inserted += wc
+                    dict_inserted += dc
+                    batch_words = []
+                    batch_dict = []
+
+            # Flush remaining
+            if batch_words or batch_dict:
+                wc, dc = flush_batches(session, batch_words, batch_dict)
+                words_inserted += wc
+                dict_inserted += dc
+
+    logger.info(
+        "CSV seed complete: %d words, %d dictionary entries processed",
+        words_inserted,
+        dict_inserted,
+    )
+    return words_inserted
+
+
 def seed_sample_words_if_empty() -> int:
+    """Seed from CSV first; fall back to hardcoded sample words only if CSV is unavailable."""
+    csv_count = seed_from_csv_if_empty()
+    if csv_count > 0:
+        return csv_count
+
+    # Check if words table already has data (e.g. from previous CSV seed)
+    with get_db() as session:
+        existing = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
+        if existing > 0:
+            return 0
+
     sample_words = [
         # ── A1 — Beginner (30 words) ────────────────────────────────
         ("привіт", "hello", "A1"),

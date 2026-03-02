@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .db import get_db, seed_sample_words_if_empty
+from .db import get_db, seed_from_csv_if_empty, seed_sample_words_if_empty
 from .elo import expected_score, update_elo
 from .rate_limit import SlidingWindowLimiter, ViolationTracker
 from .scoring import LLMScorer
