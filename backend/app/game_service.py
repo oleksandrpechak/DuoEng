@@ -710,8 +710,10 @@ class GameService:
                 "response_time": elapsed,
             }
 
-        # Use description-based scoring: the player describes the English word
-        scoring = await self.scorer.score_description(turn_snapshot["correct_answer"], answer)
+        # Use description-based scoring: the player describes/translates the Ukrainian word in English
+        scoring = await self.scorer.score_description(
+            turn_snapshot["correct_answer"], answer, ua_word=turn_snapshot["ua_word"]
+        )
 
         with get_db() as session:
             self._ensure_not_banned(session, player_id, ip)
@@ -1134,3 +1136,57 @@ class GameService:
             settings.rate_limit_ws_messages_per_min,
             60,
         )
+
+    def leave_room(self, room_code: str, player_id: str) -> dict[str, Any]:
+        """Player voluntarily leaves the room, forfeiting the match."""
+        normalized_code = room_code.upper()
+        with get_db() as session:
+            room = self._fetch_room(session, normalized_code)
+            if not room:
+                raise HTTPException(status_code=404, detail="Room not found")
+
+            membership = self._fetch_membership(session, normalized_code, player_id)
+            if not membership:
+                raise HTTPException(status_code=403, detail="You are not in this room")
+
+            if room["status"] == "finished":
+                return {"detail": "Match already finished"}
+
+            # If game is playing, the other player wins by forfeit
+            if room["status"] == "playing":
+                winner_id = self._other_player_id(session, normalized_code, player_id)
+                if winner_id:
+                    self._finish_match(session, room, winner_id)
+                else:
+                    # Solo room — just finish it
+                    session.execute(
+                        text(
+                            """
+                            UPDATE rooms
+                            SET status = 'finished',
+                                current_turn = NULL,
+                                turn_started_at = NULL,
+                                current_word_ua = NULL,
+                                current_word_en = NULL
+                            WHERE code = :room_code
+                            """
+                        ),
+                        {"room_code": normalized_code},
+                    )
+            elif room["status"] == "waiting":
+                # Just mark room as finished
+                session.execute(
+                    text("UPDATE rooms SET status = 'finished' WHERE code = :room_code"),
+                    {"room_code": normalized_code},
+                )
+
+            logger.info(
+                "Player left room",
+                extra={
+                    "event": "player_left",
+                    "room_code": normalized_code,
+                    "player_id": player_id,
+                },
+            )
+
+            return {"detail": "Left the room", "room_code": normalized_code}

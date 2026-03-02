@@ -182,8 +182,8 @@ class LLMScorer:
 
         return ScoreResult(score=0, source="fallback_no_match", used_llm=False)
 
-    async def _call_llm_describe(self, word: str, description: str) -> Optional[ScoreResult]:
-        """Call Gemini to judge whether description matches word meaning."""
+    async def _call_llm_describe(self, word: str, description: str, ua_word: str = "") -> Optional[ScoreResult]:
+        """Call Gemini to judge whether the English response matches the Ukrainian word."""
         from .services.gemini_service import (
             GeminiServiceError,
             generate_text,
@@ -191,13 +191,23 @@ class LLMScorer:
 
         safe_word = self._sanitize_for_llm(word, max_length=64)
         safe_desc = self._sanitize_for_llm(description, max_length=200)
+        safe_ua = self._sanitize_for_llm(ua_word, max_length=64) if ua_word else ""
 
-        prompt = (
-            f'You are a vocabulary judge. The word is: "{safe_word}". '
-            f'The player\'s description is: "{safe_desc}". '
-            "Does the description correctly explain the meaning of the word? "
-            "Reply with only: YES or NO"
-        )
+        if safe_ua:
+            prompt = (
+                "You are a vocabulary judge for a Ukrainian-English learning game. "
+                f'The Ukrainian word shown to the player was: "{safe_ua}". '
+                f'The player\'s English response was: "{safe_desc}". '
+                "Is the player's response a correct translation or accurate description of the Ukrainian word? "
+                "Reply with only: YES or NO"
+            )
+        else:
+            prompt = (
+                f'You are a vocabulary judge. The word is: "{safe_word}". '
+                f'The player\'s description is: "{safe_desc}". '
+                "Does the description correctly explain the meaning of the word? "
+                "Reply with only: YES or NO"
+            )
 
         LLM_CALLS_TOTAL.inc()
 
@@ -222,9 +232,9 @@ class LLMScorer:
             return ScoreResult(score=1, source="llm", used_llm=True)
         return ScoreResult(score=0, source="llm", used_llm=True)
 
-    async def score_description(self, word: str, description: str) -> ScoreResult:
-        """Score a player's description of an English word. Returns 1 (correct) or 0 (wrong)."""
-        key = self._cache_key(word, description)
+    async def score_description(self, word: str, description: str, ua_word: str = "") -> ScoreResult:
+        """Score a player's English response for a Ukrainian word. Returns 1 (correct) or 0 (wrong)."""
+        key = self._cache_key(f"{ua_word}:{word}" if ua_word else word, description)
         cached = self._load_cached(key)
         if cached:
             return cached
@@ -232,7 +242,7 @@ class LLMScorer:
         # Try LLM first
         try:
             llm_result = await asyncio.wait_for(
-                self._call_llm_describe(word, description),
+                self._call_llm_describe(word, description, ua_word=ua_word),
                 timeout=LLM_HARD_TIMEOUT + 1.0,
             )
         except asyncio.TimeoutError:

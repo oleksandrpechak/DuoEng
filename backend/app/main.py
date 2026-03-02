@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 import logging
 from typing import Optional
@@ -258,6 +259,29 @@ async def submit_move_legacy(
     return MoveResponse(**result)
 
 
+@api_router.post("/rooms/{room_code}/leave")
+async def leave_room(
+    room_code: str,
+    auth: AuthContext = Depends(_auth_user_from_header),
+) -> dict:
+    result = service.leave_room(room_code=room_code, player_id=auth.player_id)
+
+    # Notify remaining player via WebSocket
+    async def _state_provider(target_room_code: str, target_player_id: str) -> dict:
+        return service.room_state_for_player(target_room_code, target_player_id, ip="http")
+
+    await ws_manager.broadcast(room_code.upper(), {
+        "type": "opponent_left",
+        "message": "Your opponent left. You win!",
+    })
+    try:
+        await ws_manager.broadcast_room_state(room_code.upper(), _state_provider)
+    except Exception:
+        pass
+
+    return result
+
+
 @api_router.get("/leaderboard", response_model=list[LeaderboardItem])
 async def leaderboard(
     limit: int = Query(default=20, ge=1, le=100),
@@ -345,6 +369,49 @@ async def api_healthcheck() -> dict[str, str]:
     with get_db() as session:
         session.execute(text("SELECT 1"))
     return {"status": "ok", "ts": datetime.now(timezone.utc).isoformat()}
+
+
+# ---------------------------------------------------------------------------
+# Public stats endpoint – no auth, cached for 60 seconds
+# ---------------------------------------------------------------------------
+_stats_cache: dict[str, object] = {"data": None, "expires_at": 0.0}
+
+
+@api_router.get("/stats")
+async def public_stats() -> dict:
+    """Return aggregate platform stats. No auth required. Cached for 60s."""
+    now = time.monotonic()
+    if _stats_cache["data"] is not None and now < _stats_cache["expires_at"]:
+        return _stats_cache["data"]
+
+    with get_db() as session:
+        total_words = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
+
+        # Also check dictionary_entries if available
+        try:
+            total_dict_entries = session.execute(text("SELECT COUNT(*) FROM dictionary_entries")).scalar() or 0
+        except Exception:
+            total_dict_entries = 0
+
+        total_players = session.execute(text("SELECT COUNT(*) FROM players")).scalar() or 0
+        total_games = session.execute(text("SELECT COUNT(*) FROM matches")).scalar() or 0
+
+        level_rows = session.execute(
+            text("SELECT level, COUNT(*) as cnt FROM words GROUP BY level ORDER BY level")
+        ).mappings().all()
+
+    words_by_level = {row["level"]: row["cnt"] for row in level_rows}
+    result = {
+        "total_words": max(total_words, total_dict_entries),
+        "total_players": total_players,
+        "total_games_played": total_games,
+        "words_by_level": words_by_level,
+    }
+
+    _stats_cache["data"] = result
+    _stats_cache["expires_at"] = now + 60.0
+
+    return result
 
 
 @app.get("/health")
@@ -456,8 +523,49 @@ async def websocket_room(websocket: WebSocket, room_code: str) -> None:
                 await websocket.send_json({"type": "pong", "ts": datetime.now(timezone.utc).isoformat()})
                 continue
 
+            if msg_type == "pause":
+                room_code_upper = room_code.upper()
+                if ws_manager.is_paused(room_code_upper):
+                    await websocket.send_json({"type": "error", "detail": "Game is already paused"})
+                else:
+                    ws_manager.pause_room(room_code_upper, auth.nickname)
+                    await ws_manager.broadcast(room_code_upper, {
+                        "type": "game_paused",
+                        "paused_by": auth.nickname,
+                    })
+                continue
+
+            if msg_type == "resume":
+                room_code_upper = room_code.upper()
+                if not ws_manager.is_paused(room_code_upper):
+                    await websocket.send_json({"type": "error", "detail": "Game is not paused"})
+                else:
+                    ws_manager.resume_room(room_code_upper)
+                    await ws_manager.broadcast(room_code_upper, {
+                        "type": "game_resumed",
+                    })
+                continue
+
+            if msg_type == "leave":
+                room_code_upper = room_code.upper()
+                try:
+                    service.leave_room(room_code=room_code, player_id=auth.player_id)
+                except HTTPException:
+                    pass
+                await ws_manager.broadcast(room_code_upper, {
+                    "type": "opponent_left",
+                    "message": f"{auth.nickname} left the game. You win!",
+                })
+                await websocket.send_json({"type": "left", "detail": "You left the room"})
+                return
+
             if msg_type not in {"submit", "move"}:
                 await websocket.send_json({"type": "error", "detail": "Unsupported message type"})
+                continue
+
+            # Block submissions while paused
+            if ws_manager.is_paused(room_code.upper()):
+                await websocket.send_json({"type": "error", "detail": "Game is paused"})
                 continue
 
             if not service.ws_message_allowed(room_code, auth.player_id):

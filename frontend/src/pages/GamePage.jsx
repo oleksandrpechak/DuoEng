@@ -3,7 +3,18 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import { Clock, Trophy, CheckCircle2, XCircle, AlertCircle, Send, Loader2 } from "lucide-react";
+import { Clock, Trophy, CheckCircle2, XCircle, AlertCircle, Send, Loader2, Pause, Play, LogOut } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import CefrBadge from "@/components/CefrBadge";
@@ -15,7 +26,10 @@ export default function GamePage() {
   const [answer, setAnswer] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastFeedback, setLastFeedback] = useState(null);
+  const [isPaused, setIsPaused] = useState(false);
+  const [pausedBy, setPausedBy] = useState(null);
   const inputRef = useRef(null);
+  const wsRef = useRef(null);
 
   const userId = sessionStorage.getItem("userId");
   const accessToken = sessionStorage.getItem("accessToken");
@@ -56,6 +70,72 @@ export default function GamePage() {
     const interval = setInterval(fetchGameState, 2000);
     return () => clearInterval(interval);
   }, [fetchGameState]);
+
+  // WebSocket connection for real-time pause/resume/leave
+  useEffect(() => {
+    if (!accessToken || !code) return;
+
+    const backendUrl = (process.env.REACT_APP_BACKEND_URL || "http://localhost:8000").replace(/^http/, "ws");
+    const wsUrl = `${backendUrl}/ws/rooms/${code}?token=${accessToken}`;
+
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "game_paused") {
+          setIsPaused(true);
+          setPausedBy(msg.paused_by);
+          toast.info(`Game paused by ${msg.paused_by}`);
+        } else if (msg.type === "game_resumed") {
+          setIsPaused(false);
+          setPausedBy(null);
+          toast.success("Game resumed!");
+        } else if (msg.type === "opponent_left") {
+          toast.success(msg.message || "Your opponent left. You win!");
+          setTimeout(() => navigate(`/end/${code}`), 1500);
+        } else if (msg.type === "game_state") {
+          setGameState(msg.data);
+          if (msg.data?.last_feedback) setLastFeedback(msg.data.last_feedback);
+          if (msg.data?.status === "finished") navigate(`/end/${code}`);
+        }
+      } catch {
+        // ignore parse errors
+      }
+    };
+
+    ws.onerror = () => {};
+    ws.onclose = () => {};
+
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
+  }, [accessToken, code, navigate]);
+
+  const handlePauseResume = () => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      toast.error("Not connected");
+      return;
+    }
+    if (isPaused) {
+      ws.send(JSON.stringify({ type: "resume" }));
+    } else {
+      ws.send(JSON.stringify({ type: "pause" }));
+    }
+  };
+
+  const handleLeave = async () => {
+    try {
+      await api.post(`/rooms/${code}/leave`);
+      toast.info("You left the match");
+      navigate("/");
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Failed to leave");
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -184,17 +264,12 @@ export default function GamePage() {
           <CardContent className="p-8 text-center">
             {isMyTurn && gameState.current_turn ? (
               <>
-                <p className="text-sm text-muted-foreground mb-2">Describe this word:</p>
+                <p className="text-sm text-muted-foreground mb-2">🇺🇦 Translate or describe this word in English:</p>
                 <p className="font-heading text-4xl sm:text-5xl font-bold text-foreground animate-fade-in-up" data-testid="word-display">
-                  {gameState.current_turn.word_en || gameState.current_turn.word_ua}
+                  {gameState.current_turn.word_ua || gameState.current_turn.word_en}
                 </p>
-                {gameState.current_turn.word_ua && gameState.current_turn.word_en && (
-                  <p className="text-sm text-muted-foreground mt-3">
-                    🇺🇦 {gameState.current_turn.word_ua}
-                  </p>
-                )}
                 <p className="text-xs text-muted-foreground mt-4">
-                  Describe the meaning in your own words • +1 pt if accepted
+                  Type the English translation or describe this word • +1 pt if accepted
                 </p>
               </>
             ) : (
@@ -215,7 +290,7 @@ export default function GamePage() {
               <Input
                 ref={inputRef}
                 data-testid="answer-input"
-                placeholder="Describe the word meaning..."
+                placeholder="Your English answer..."
                 value={answer}
                 onChange={(e) => setAnswer(e.target.value)}
                 className="rounded-full h-14 px-6 text-lg flex-1"
@@ -259,10 +334,10 @@ export default function GamePage() {
                     {lastFeedback.player_nickname}'s turn:
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    Word: {lastFeedback.correct_en}
+                    🇺🇦 {lastFeedback.word_ua || lastFeedback.correct_en} → 🇬🇧 {lastFeedback.correct_en}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Description: "{lastFeedback.answer}" • 
+                    Answer: "{lastFeedback.answer}" • 
                     {lastFeedback.status === "expired" ? " Time expired" : ` +${lastFeedback.points} pts`}
                   </p>
                 </div>
@@ -270,7 +345,85 @@ export default function GamePage() {
             </CardContent>
           </Card>
         )}
+
+        {/* Pause & Leave Buttons */}
+        <div className="flex gap-2 mb-4">
+          <Button
+            variant="outline"
+            className={`flex-1 rounded-full h-10 text-sm font-medium ${
+              isPaused
+                ? "bg-accent/20 border-accent text-accent-foreground hover:bg-accent/30"
+                : "bg-amber-500/10 border-amber-500/30 text-amber-600 hover:bg-amber-500/20"
+            }`}
+            onClick={handlePauseResume}
+            data-testid="pause-btn"
+          >
+            {isPaused ? (
+              <>
+                <Play className="w-4 h-4 mr-2" />
+                Resume
+              </>
+            ) : (
+              <>
+                <Pause className="w-4 h-4 mr-2" />
+                Pause
+              </>
+            )}
+          </Button>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                className="flex-1 rounded-full h-10 text-sm font-medium bg-destructive/10 border-destructive/30 text-destructive hover:bg-destructive/20"
+                data-testid="leave-btn"
+              >
+                <LogOut className="w-4 h-4 mr-2" />
+                Leave
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent className="rounded-2xl">
+              <AlertDialogHeader>
+                <AlertDialogTitle>Leave the match?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Are you sure you want to leave? You will forfeit the match and your opponent will win.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel className="rounded-full">Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  className="rounded-full bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  onClick={handleLeave}
+                >
+                  Leave Match
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
       </div>
+
+      {/* PAUSED Overlay */}
+      {isPaused && (
+        <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center" data-testid="paused-overlay">
+          <div className="text-center animate-fade-in-up">
+            <div className="bg-card rounded-3xl p-8 shadow-lg max-w-sm mx-4">
+              <Pause className="w-16 h-16 mx-auto text-amber-500 mb-4" />
+              <h2 className="font-heading text-3xl font-bold text-foreground mb-2">PAUSED</h2>
+              <p className="text-muted-foreground mb-6">
+                {pausedBy ? `Paused by ${pausedBy}` : "Game is paused"}
+              </p>
+              <Button
+                className="rounded-full px-8 h-12 text-base bg-accent hover:bg-accent/90"
+                onClick={handlePauseResume}
+              >
+                <Play className="w-5 h-5 mr-2" />
+                Resume Game
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -15,8 +15,9 @@ export default function LobbyPage() {
 
   const userId = sessionStorage.getItem("userId");
   const accessToken = sessionStorage.getItem("accessToken");
+  const nickname = sessionStorage.getItem("nickname") || "a friend";
 
-  const roomLink = `${window.location.origin}/join/${code}`;
+  const roomLink = `${process.env.REACT_APP_FRONTEND_URL || window.location.origin}/join/${code}`;
 
   const fetchGameState = useCallback(async () => {
     if (!userId || !accessToken) {
@@ -53,16 +54,17 @@ export default function LobbyPage() {
   };
 
   const copyLink = () => {
-    navigator.clipboard.writeText(roomLink);
-    toast.success("Room link copied!");
+    const challengeMsg = `Wanna duel ${nickname}? I dare you! 🎯\nJoin my game: ${roomLink}`;
+    navigator.clipboard.writeText(challengeMsg);
+    toast.success("Challenge link copied! 🎯");
   };
 
   const shareRoom = async () => {
     if (navigator.share) {
       try {
         await navigator.share({
-          title: "DuoVocab Duel — Join my game!",
-          text: `Join my vocabulary duel! Room code: ${code}`,
+          title: "DuoEng Vocabulary Duel",
+          text: `Wanna duel ${nickname}? I dare you! 🎯`,
           url: roomLink,
         });
       } catch {

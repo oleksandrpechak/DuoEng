@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,10 +18,41 @@ import {
   ChevronRight,
   Trophy,
   XCircle,
+  Gamepad2,
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import CefrBadge, { getCefrColor } from "@/components/CefrBadge";
+
+/** Animated counter: counts from 0 to `end` over `duration` ms */
+function useAnimatedCounter(end, duration = 1000) {
+  const [value, setValue] = useState(0);
+  const rafRef = useRef(null);
+
+  useEffect(() => {
+    if (!end || end <= 0) {
+      setValue(0);
+      return;
+    }
+    const startTime = performance.now();
+    const step = (now) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      // ease-out quad
+      const eased = 1 - (1 - progress) * (1 - progress);
+      setValue(Math.round(eased * end));
+      if (progress < 1) {
+        rafRef.current = requestAnimationFrame(step);
+      }
+    };
+    rafRef.current = requestAnimationFrame(step);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [end, duration]);
+
+  return value;
+}
 
 const FEATURE_TABS = {
   DICTIONARY: "dictionary",
@@ -58,6 +89,36 @@ export default function LandingPage() {
   const [playerStats, setPlayerStats] = useState(null);
   const [historyData, setHistoryData] = useState(null);
   const [historyPage, setHistoryPage] = useState(1);
+  const [platformStats, setPlatformStats] = useState(null);
+
+  // Fetch public stats (no auth needed) with sessionStorage cache
+  useEffect(() => {
+    const cacheKey = "duoeng_platform_stats";
+    const cached = sessionStorage.getItem(cacheKey);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (parsed._cachedAt && Date.now() - parsed._cachedAt < 60000) {
+          setPlatformStats(parsed);
+          return;
+        }
+      } catch { /* ignore */ }
+    }
+
+    api.get("/stats")
+      .then((res) => {
+        const data = { ...res.data, _cachedAt: Date.now() };
+        setPlatformStats(data);
+        sessionStorage.setItem(cacheKey, JSON.stringify(data));
+      })
+      .catch(() => {
+        // Silently ignore – stats section will just not render
+      });
+  }, []);
+
+  const animatedWords = useAnimatedCounter(platformStats?.total_words || 0);
+  const animatedPlayers = useAnimatedCounter(platformStats?.total_players || 0);
+  const animatedGames = useAnimatedCounter(platformStats?.total_games_played || 0);
 
   // Handle Google OAuth callback params
   useEffect(() => {
@@ -276,19 +337,56 @@ export default function LandingPage() {
       </div>
 
       <div className="flex gap-4 mb-8 text-sm text-muted-foreground">
-        <div className="flex items-center gap-1">
-          <Users className="w-4 h-4" />
-          <span>2 Players</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <BookOpen className="w-4 h-4" />
-          <span>5000+ Words</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <Zap className="w-4 h-4" />
-          <span>Instant Play</span>
-        </div>
+        {platformStats ? (
+          <>
+            <div className="flex items-center gap-1">
+              <BookOpen className="w-4 h-4" />
+              <span>{animatedWords.toLocaleString()} Words</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Users className="w-4 h-4" />
+              <span>{animatedPlayers.toLocaleString()} Players</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Gamepad2 className="w-4 h-4" />
+              <span>{animatedGames.toLocaleString()} Games</span>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-1">
+              <BookOpen className="w-4 h-4" />
+              <div className="h-4 w-16 bg-muted rounded animate-pulse" />
+            </div>
+            <div className="flex items-center gap-1">
+              <Users className="w-4 h-4" />
+              <div className="h-4 w-16 bg-muted rounded animate-pulse" />
+            </div>
+            <div className="flex items-center gap-1">
+              <Zap className="w-4 h-4" />
+              <div className="h-4 w-16 bg-muted rounded animate-pulse" />
+            </div>
+          </>
+        )}
       </div>
+
+      {/* CEFR Level Breakdown */}
+      {platformStats?.words_by_level && Object.keys(platformStats.words_by_level).length > 0 && (
+        <div className="flex flex-wrap justify-center gap-2 mb-6">
+          {["A1", "A2", "B1", "B2", "C1", "C2"].map((level) => {
+            const count = platformStats.words_by_level[level];
+            if (!count) return null;
+            return (
+              <span
+                key={level}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border ${getCefrColor(level)}`}
+              >
+                {level} <span className="text-muted-foreground">• {count}</span>
+              </span>
+            );
+          })}
+        </div>
+      )}
 
       <Card className="w-full max-w-md rounded-3xl shadow-soft border-0" data-testid="main-card">
         <CardHeader className="text-center pb-2">

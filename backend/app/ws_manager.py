@@ -17,6 +17,7 @@ StateProvider = Callable[[str, str], Awaitable[dict]]
 class ConnectionManager:
     def __init__(self) -> None:
         self._active_rooms: dict[str, dict[str, set[WebSocket]]] = {}
+        self._paused_rooms: dict[str, str] = {}  # room_code -> paused_by_nickname
         self._lock = asyncio.Lock()
 
     async def connect(
@@ -87,3 +88,12 @@ class ConnectionManager:
     def room_connection_count(self, room_code: str) -> int:
         room = self._active_rooms.get(room_code, {})
         return sum(len(sockets) for sockets in room.values())
+
+    def is_paused(self, room_code: str) -> bool:
+        return room_code in self._paused_rooms
+
+    def pause_room(self, room_code: str, nickname: str) -> None:
+        self._paused_rooms[room_code] = nickname
+
+    def resume_room(self, room_code: str) -> None:
+        self._paused_rooms.pop(room_code, None)
