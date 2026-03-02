@@ -4,8 +4,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0004_cefr_levels_and_room_word_level"
-down_revision = "0003_player_oauth_and_match_index"
+revision = "0004_cefr_room_level"
+down_revision = "0003_oauth_match_idx"
 branch_labels = None
 depends_on = None
 
