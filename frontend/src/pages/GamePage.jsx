@@ -28,6 +28,7 @@ export default function GamePage() {
   const [lastFeedback, setLastFeedback] = useState(null);
   const [isPaused, setIsPaused] = useState(false);
   const [pausedBy, setPausedBy] = useState(null);
+  const [scoringSourceMsg, setScoringSourceMsg] = useState(null);
   const inputRef = useRef(null);
   const wsRef = useRef(null);
 
@@ -147,15 +148,33 @@ export default function GamePage() {
         answer: answer.trim()
       });
 
-      const { points, feedback, correct_answer, game_over } = response.data;
+      const { points, feedback, correct_answer, game_over, scoring_source } = response.data;
 
-      if (feedback === "correct") {
+      // Show scoring source feedback for 2.5 seconds
+      const source = (scoring_source || "").toLowerCase();
+      if (feedback === "correct" || points >= 1) {
+        const isDictionary = source.includes("dictionary");
+        setScoringSourceMsg({
+          text: isDictionary ? `✓ +${points} · dictionary match` : `✓ +${points} · AI verified`,
+          color: isDictionary ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                              : "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
+        });
         toast.success(`Great description! +${points} point`);
       } else if (feedback === "expired") {
+        setScoringSourceMsg(null);
         toast.error(`Time expired! The word was: ${correct_answer}`);
       } else {
+        const isDictionary = source.includes("dictionary");
+        setScoringSourceMsg({
+          text: isDictionary ? `✗ 0 · dictionary: no match` : `✗ 0 · AI: incorrect`,
+          color: isDictionary ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+                              : "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300",
+        });
         toast.error(`Not accepted. The word was: ${correct_answer}`);
       }
+
+      // Auto-clear scoring source message after 2.5s
+      setTimeout(() => setScoringSourceMsg(null), 2500);
 
       setAnswer("");
 
@@ -313,6 +332,15 @@ export default function GamePage() {
           </form>
         )}
 
+        {/* Scoring Source Badge */}
+        {scoringSourceMsg && (
+          <div className="mb-3 flex justify-center animate-fade-in-up" data-testid="scoring-source">
+            <span className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-opacity ${scoringSourceMsg.color}`}>
+              {scoringSourceMsg.text}
+            </span>
+          </div>
+        )}
+
         {/* Last Turn Feedback */}
         {lastFeedback && (
           <Card className={`rounded-2xl border-0 mb-4 ${
@@ -339,6 +367,15 @@ export default function GamePage() {
                   <p className="text-xs text-muted-foreground mt-1">
                     Answer: "{lastFeedback.answer}" • 
                     {lastFeedback.status === "expired" ? " Time expired" : ` +${lastFeedback.points} pts`}
+                    {lastFeedback.scoring_source && lastFeedback.status !== "expired" && (
+                      <span className={`ml-1 ${
+                        lastFeedback.scoring_source.includes("dictionary") ? "text-green-600 dark:text-green-400" :
+                        lastFeedback.scoring_source.includes("llm") ? "text-blue-600 dark:text-blue-400" :
+                        ""
+                      }`}>
+                        · {lastFeedback.scoring_source.includes("dictionary") ? "dictionary" : lastFeedback.scoring_source.includes("llm") ? "AI" : lastFeedback.scoring_source}
+                      </span>
+                    )}
                   </p>
                 </div>
               </div>

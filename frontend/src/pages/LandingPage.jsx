@@ -92,6 +92,32 @@ export default function LandingPage() {
   const [platformStats, setPlatformStats] = useState(null);
   const [isSignedIn, setIsSignedIn] = useState(() => !!sessionStorage.getItem("accessToken"));
 
+  // Navigation guard: redirect to /me if already signed in
+  // (skip if Google OAuth callback params are present — they need processing first)
+  // (skip if ?action=play or ?tab= is present — user intentionally navigated here)
+  useEffect(() => {
+    const hasOAuthParams = searchParams.get("access_token") && searchParams.get("user_id");
+    if (hasOAuthParams) return; // let the OAuth useEffect below handle it
+
+    const wantsToPlay = searchParams.get("action") === "play";
+    const hasTab = !!searchParams.get("tab");
+    if (wantsToPlay || hasTab) return; // user intentionally came to landing page
+
+    const savedToken = sessionStorage.getItem("accessToken");
+    const savedUser = sessionStorage.getItem("userId");
+    if (savedToken && savedUser) {
+      navigate("/me", { replace: true });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-open feature tab from ?tab= query param (e.g. from ProfilePage links)
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab && Object.values(FEATURE_TABS).includes(tab)) {
+      handleFeatureToggle(tab);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Fetch public stats (no auth needed) with sessionStorage cache
   useEffect(() => {
     const cacheKey = "duoeng_platform_stats";
@@ -137,11 +163,13 @@ export default function LandingPage() {
       sessionStorage.setItem("accessToken", token);
       sessionStorage.setItem("userId", userId);
       sessionStorage.setItem("nickname", nick);
+      sessionStorage.setItem("authType", "google");
       setNickname(nick);
       setIsSignedIn(true);
       toast.success(`Signed in as ${nick}`);
-      // Clean URL
+      // Clean URL then redirect to profile
       window.history.replaceState({}, document.title, "/");
+      navigate("/me");
     }
   }, [searchParams]);
 
@@ -158,6 +186,7 @@ export default function LandingPage() {
       sessionStorage.setItem("userId", response.data.user_id);
       sessionStorage.setItem("nickname", response.data.nickname);
       sessionStorage.setItem("accessToken", response.data.access_token);
+      sessionStorage.setItem("authType", "guest");
       setIsSignedIn(true);
       return response.data.user_id;
     } catch (error) {
@@ -415,6 +444,13 @@ export default function LandingPage() {
           {isSignedIn && (
             <div className="text-center text-sm text-muted-foreground">
               Signed in as <span className="font-semibold text-foreground">{sessionStorage.getItem("nickname")}</span>
+              <span className="mx-1">•</span>
+              <button
+                className="text-primary hover:underline font-medium"
+                onClick={() => navigate("/me")}
+              >
+                My Profile
+              </button>
             </div>
           )}
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -16,6 +17,23 @@ from app.config import settings
 from app.models import Base
 
 logger = logging.getLogger("duoeng.db")
+
+CEFR_LEVELS = {"A1", "A2", "B1", "B2", "C1", "C2"}
+
+# Part-of-speech abbreviation expansion
+POS_MAP = {
+    "n": "noun",
+    "v": "verb",
+    "adj": "adjective",
+    "adv": "adverb",
+    "prep": "preposition",
+    "conj": "conjunction",
+    "pron": "pronoun",
+    "num": "numeral",
+    "pref": "prefix",
+    "suf": "suffix",
+    "int": "interjection",
+}
 
 
 def _utc_now() -> datetime:
@@ -98,7 +116,7 @@ def init_db() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CSV Dictionary Seeder
+# CSV Dictionary Seeder — auto-detects format
 # ---------------------------------------------------------------------------
 
 def _find_csv_path() -> str | None:
@@ -108,6 +126,7 @@ def _find_csv_path() -> str | None:
         Path(__file__).parent / "seeds" / "dictionary_clean.csv",
         Path(__file__).parent / "dictionary_clean.csv",
         Path(__file__).parent.parent / "data" / "processed" / "dictionary_clean.csv",
+        Path(__file__).parent / "data" / "dictionary_clean.csv",
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -115,161 +134,270 @@ def _find_csv_path() -> str | None:
     return None
 
 
-def seed_from_csv_if_empty(csv_path: str | None = None) -> int:
+def _detect_csv_format(csv_path: str) -> str:
+    """Detect the CSV format by inspecting the first line.
+
+    Returns:
+        "header4"  — has header row with 4 columns (dictionary_clean.csv)
+        "header3"  — has header row with 3 columns
+        "format1"  — no header, 3 cols, last col is CEFR level (sample words)
+        "format2"  — no header, 4 cols (ua, en, pos, source)
+    """
+    with open(csv_path, encoding="utf-8-sig") as f:
+        first_line = f.readline().strip()
+
+    if not first_line:
+        return "format1"
+
+    cols = first_line.split(",")
+
+    # Check if the first line looks like a header row
+    first_lower = [c.strip().lower() for c in cols]
+    header_keywords = {"ua_word", "en_word", "word", "source", "part_of_speech", "pos", "level", "ua", "en"}
+    if any(kw in header_keywords for kw in first_lower):
+        if len(cols) >= 4:
+            return "header4"
+        return "header3"
+
+    # No header — detect by content
+    if len(cols) == 3 and cols[2].strip().upper() in CEFR_LEVELS:
+        return "format1"
+
+    if len(cols) >= 4:
+        return "format2"
+
+    return "format1"
+
+
+def _expand_pos(raw: str) -> str:
+    """Expand part-of-speech abbreviation to full word."""
+    cleaned = raw.strip().lower()
+    return POS_MAP.get(cleaned, cleaned)
+
+
+def seed_from_csv(force: bool = False) -> int:
     """Seed the words + dictionary_entries tables from dictionary_clean.csv.
 
-    Only seeds if the words table has ≤10 rows (sample data or empty).
-    Returns the number of word-pairs inserted into the words table.
-
-    The CSV has columns: ua_word, en_word, part_of_speech, source
+    Auto-detects CSV format (with/without headers, 3 or 4 columns).
+    Returns the number of unique words inserted into the words table.
+    Idempotent: uses ON CONFLICT DO NOTHING / INSERT OR IGNORE.
     """
-    if csv_path is None:
-        csv_path = _find_csv_path()
+    csv_path = _find_csv_path()
 
-    if not csv_path or not Path(csv_path).exists():
-        logger.warning("dictionary_clean.csv not found, skipping CSV seed")
+    if not csv_path:
+        logger.warning("dictionary_clean.csv NOT FOUND — searched common paths")
         return 0
 
+    logger.info("Found CSV at: %s", csv_path)
+
     with get_db() as session:
-        existing_words = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
-        if existing_words > 10 and os.environ.get("FORCE_RESEED") != "1":
-            logger.info(
-                "Words table already has %d rows, skipping CSV seed",
-                existing_words,
-            )
+        existing_count = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
+        if existing_count > 50 and not force:
+            logger.info("Dictionary already seeded with %d words, skipping", existing_count)
             return 0
 
-    # If FORCE_RESEED, clear existing data first
-    if os.environ.get("FORCE_RESEED") == "1":
-        logger.info("FORCE_RESEED=1 detected, clearing words and dictionary_entries tables")
+    if force:
+        logger.info("Force reseed — clearing words and dictionary_entries tables")
         with get_db() as session:
             session.execute(text("DELETE FROM words"))
             session.execute(text("DELETE FROM dictionary_entries"))
 
-    # Determine DB dialect for conflict handling
-    is_sqlite = settings.database_url.startswith("sqlite")
+    fmt = _detect_csv_format(csv_path)
+    logger.info("CSV format detected: %s", fmt)
 
-    # Read CSV and collect unique word-pairs for the words table.
-    # We'll assign CEFR levels based on word frequency / position in CSV as a rough proxy,
-    # or default to B1. For dictionary_entries we insert all rows.
-    words_inserted = 0
-    dict_inserted = 0
+    is_sqlite = settings.database_url.startswith("sqlite")
+    word_sql = (
+        "INSERT OR IGNORE INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level)"
+        if is_sqlite
+        else "INSERT INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level) ON CONFLICT (id) DO NOTHING"
+    )
+    dict_sql = (
+        "INSERT OR IGNORE INTO dictionary_entries (ua_word, en_word, part_of_speech, source) "
+        "VALUES (:ua_word, :en_word, :part_of_speech, :source)"
+        if is_sqlite
+        else "INSERT INTO dictionary_entries (ua_word, en_word, part_of_speech, source) "
+        "VALUES (:ua_word, :en_word, :part_of_speech, :source) ON CONFLICT (ua_word, en_word) DO NOTHING"
+    )
+
+    inserted_words = 0
+    inserted_dict = 0
     seen_word_ids: set[str] = set()
     batch_words: list[dict] = []
     batch_dict: list[dict] = []
-    BATCH_SIZE = 1000
+    BATCH_SIZE = 500
+    rows_processed = 0
 
-    # Simple heuristic for CEFR level assignment for words not already leveled
-    # (the CSV doesn't have levels, so we default to B1)
-    DEFAULT_LEVEL = "B1"
+    def flush(session: Session) -> tuple[int, int]:
+        nonlocal batch_words, batch_dict
+        w = 0
+        d = 0
+        if batch_words:
+            session.execute(text(word_sql), batch_words)
+            w = len(batch_words)
+            batch_words = []
+        if batch_dict:
+            session.execute(text(dict_sql), batch_dict)
+            d = len(batch_dict)
+            batch_dict = []
+        return w, d
 
-    def flush_batches(session: Session, w_batch: list[dict], d_batch: list[dict]) -> tuple[int, int]:
-        w_count = 0
-        d_count = 0
+    def _make_word_id(en: str) -> str:
+        """Create a stable unique word id from the English text."""
+        slug = en.lower().replace(" ", "_").replace("'", "")
+        if len(slug) > 56:
+            slug = slug[:52] + hashlib.md5(en.encode()).hexdigest()[:4]
+        return slug[:64]
 
-        if w_batch:
-            if is_sqlite:
-                session.execute(
-                    text(
-                        "INSERT OR IGNORE INTO words (id, ua, en, level) "
-                        "VALUES (:id, :ua, :en, :level)"
-                    ),
-                    w_batch,
-                )
-            else:
-                session.execute(
-                    text(
-                        "INSERT INTO words (id, ua, en, level) "
-                        "VALUES (:id, :ua, :en, :level) "
-                        "ON CONFLICT (id) DO NOTHING"
-                    ),
-                    w_batch,
-                )
-            w_count = len(w_batch)
+    with open(csv_path, encoding="utf-8-sig", newline="") as f:
+        if fmt in ("header4", "header3"):
+            # Has a header row — use DictReader
+            reader = csv.DictReader(f)
+            headers = reader.fieldnames or []
+            logger.info("CSV columns detected: %s", headers)
 
-        if d_batch:
-            if is_sqlite:
-                session.execute(
-                    text(
-                        "INSERT OR IGNORE INTO dictionary_entries (ua_word, en_word, part_of_speech, source) "
-                        "VALUES (:ua_word, :en_word, :part_of_speech, :source)"
-                    ),
-                    d_batch,
-                )
-            else:
-                session.execute(
-                    text(
-                        "INSERT INTO dictionary_entries (ua_word, en_word, part_of_speech, source) "
-                        "VALUES (:ua_word, :en_word, :part_of_speech, :source) "
-                        "ON CONFLICT (ua_word, en_word) DO NOTHING"
-                    ),
-                    d_batch,
-                )
-            d_count = len(d_batch)
+            # Auto-detect column names
+            def _find_col(candidates: list[str]) -> str | None:
+                for c in candidates:
+                    for h in headers:
+                        if h.strip().lower() == c.lower():
+                            return h
+                return None
 
-        return w_count, d_count
+            ua_col = _find_col(["ua_word", "ua", "ukrainian", "word_ua", "uk", "ukr"])
+            en_col = _find_col(["en_word", "en", "english", "word_en", "word"])
+            pos_col = _find_col(["part_of_speech", "pos", "type", "word_type"])
+            level_col = _find_col(["level", "cefr", "cefr_level", "difficulty"])
+            source_col = _find_col(["source"])
 
-    logger.info("Starting CSV seed from %s", csv_path)
+            logger.info("Mapped columns — ua:%s en:%s pos:%s level:%s source:%s",
+                        ua_col, en_col, pos_col, level_col, source_col)
 
-    with open(csv_path, encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        with get_db() as session:
-            for row in reader:
-                ua = (row.get("ua_word") or row.get("ua") or row.get("ukrainian") or "").strip()
-                en = (row.get("en_word") or row.get("en") or row.get("english") or "").strip()
-                pos = (row.get("part_of_speech") or row.get("pos") or "").strip()
-                source = (row.get("source") or "csv").strip()
+            if not ua_col or not en_col:
+                logger.error("Cannot find ua/en columns in CSV. Headers: %s", headers)
+                return 0
 
-                if not en or not ua:
-                    continue
+            with get_db() as session:
+                for row in reader:
+                    ua = (row.get(ua_col) or "").strip()
+                    en = (row.get(en_col) or "").strip()
+                    pos_raw = (row.get(pos_col) or "").strip() if pos_col else ""
+                    pos = _expand_pos(pos_raw)
+                    level = (row.get(level_col) or "B1").strip().upper() if level_col else "B1"
+                    source = (row.get(source_col) or "csv").strip() if source_col else "csv"
 
-                # Skip very long entries (likely definitions, not words)
-                if len(en) > 60 or len(ua) > 80:
-                    continue
+                    if not ua or not en:
+                        continue
+                    if level not in CEFR_LEVELS:
+                        level = "B1"
+                    # Skip very long entries (definitions, not words)
+                    if len(en) > 60 or len(ua) > 100:
+                        continue
 
-                # Insert into dictionary_entries (all rows)
-                batch_dict.append({
-                    "ua_word": ua.lower(),
-                    "en_word": en.lower(),
-                    "part_of_speech": pos.lower() if pos else None,
-                    "source": source.lower(),
-                })
-
-                # Insert into words table (unique en words only)
-                word_id = en.lower().replace(" ", "_").replace("'", "")[:64]
-                if word_id and word_id not in seen_word_ids:
-                    seen_word_ids.add(word_id)
-                    batch_words.append({
-                        "id": word_id,
-                        "ua": ua,
-                        "en": en,
-                        "level": DEFAULT_LEVEL,
+                    # dictionary_entries — all rows
+                    batch_dict.append({
+                        "ua_word": ua.lower(),
+                        "en_word": en.lower(),
+                        "part_of_speech": pos or None,
+                        "source": source.lower(),
                     })
 
-                if len(batch_dict) >= BATCH_SIZE:
-                    wc, dc = flush_batches(session, batch_words, batch_dict)
-                    words_inserted += wc
-                    dict_inserted += dc
-                    batch_words = []
-                    batch_dict = []
+                    # words table — unique en words
+                    word_id = _make_word_id(en)
+                    if word_id and word_id not in seen_word_ids:
+                        seen_word_ids.add(word_id)
+                        batch_words.append({
+                            "id": word_id,
+                            "ua": ua,
+                            "en": en,
+                            "level": level,
+                        })
 
-            # Flush remaining
-            if batch_words or batch_dict:
-                wc, dc = flush_batches(session, batch_words, batch_dict)
-                words_inserted += wc
-                dict_inserted += dc
+                    rows_processed += 1
+                    if len(batch_dict) >= BATCH_SIZE:
+                        w, d = flush(session)
+                        inserted_words += w
+                        inserted_dict += d
+                        if rows_processed % 10000 == 0:
+                            logger.info("Seeding progress: %d rows processed", rows_processed)
+
+                # Final flush
+                w, d = flush(session)
+                inserted_words += w
+                inserted_dict += d
+
+        else:
+            # No header — read as raw CSV
+            reader = csv.reader(f)
+
+            with get_db() as session:
+                for cols in reader:
+                    if not cols or len(cols) < 2:
+                        continue
+
+                    if fmt == "format1":
+                        # 3 columns: ua, en, level
+                        ua = cols[0].strip()
+                        en = cols[1].strip()
+                        level_raw = cols[2].strip().upper() if len(cols) > 2 else "B1"
+                        level = level_raw if level_raw in CEFR_LEVELS else "B1"
+                        pos = ""
+                        source = "sample"
+                    else:
+                        # format2: ua, en, pos, source
+                        ua = cols[0].strip()
+                        en = cols[1].strip()
+                        pos_raw = cols[2].strip() if len(cols) > 2 else ""
+                        pos = _expand_pos(pos_raw)
+                        source = cols[3].strip() if len(cols) > 3 else "csv"
+                        level = "B1"
+
+                    if not ua or not en:
+                        continue
+                    if len(en) > 60 or len(ua) > 100:
+                        continue
+
+                    batch_dict.append({
+                        "ua_word": ua.lower(),
+                        "en_word": en.lower(),
+                        "part_of_speech": pos or None,
+                        "source": source.lower(),
+                    })
+
+                    word_id = _make_word_id(en)
+                    if word_id and word_id not in seen_word_ids:
+                        seen_word_ids.add(word_id)
+                        batch_words.append({
+                            "id": word_id,
+                            "ua": ua,
+                            "en": en,
+                            "level": level,
+                        })
+
+                    rows_processed += 1
+                    if len(batch_dict) >= BATCH_SIZE:
+                        w, d = flush(session)
+                        inserted_words += w
+                        inserted_dict += d
+                        if rows_processed % 10000 == 0:
+                            logger.info("Seeding progress: %d rows processed", rows_processed)
+
+                w, d = flush(session)
+                inserted_words += w
+                inserted_dict += d
 
     logger.info(
-        "CSV seed complete: %d words, %d dictionary entries processed",
-        words_inserted,
-        dict_inserted,
+        "CSV seed complete: %d unique words, %d dictionary entries from %d rows",
+        inserted_words,
+        inserted_dict,
+        rows_processed,
     )
-    return words_inserted
+    return inserted_words
 
 
 def seed_sample_words_if_empty() -> int:
     """Seed from CSV first; fall back to hardcoded sample words only if CSV is unavailable."""
-    csv_count = seed_from_csv_if_empty()
+    force = os.environ.get("FORCE_RESEED", "0") == "1"
+    csv_count = seed_from_csv(force=force)
     if csv_count > 0:
         return csv_count
 
@@ -279,193 +407,33 @@ def seed_sample_words_if_empty() -> int:
         if existing > 0:
             return 0
 
+    # Hardcoded fallback — only used when CSV is not available
     sample_words = [
-        # ── A1 — Beginner (30 words) ────────────────────────────────
-        ("привіт", "hello", "A1"),
-        ("так", "yes", "A1"),
-        ("ні", "no", "A1"),
-        ("дякую", "thank you", "A1"),
-        ("будь ласка", "please", "A1"),
-        ("вода", "water", "A1"),
-        ("хліб", "bread", "A1"),
-        ("молоко", "milk", "A1"),
-        ("яблуко", "apple", "A1"),
-        ("кіт", "cat", "A1"),
-        ("собака", "dog", "A1"),
-        ("будинок", "house", "A1"),
-        ("день", "day", "A1"),
-        ("ніч", "night", "A1"),
-        ("мама", "mother", "A1"),
-        ("тато", "father", "A1"),
-        ("дитина", "child", "A1"),
-        ("один", "one", "A1"),
-        ("два", "two", "A1"),
-        ("три", "three", "A1"),
-        ("великий", "big", "A1"),
-        ("малий", "small", "A1"),
-        ("добрий", "good", "A1"),
-        ("поганий", "bad", "A1"),
-        ("їжа", "food", "A1"),
-        ("школа", "school", "A1"),
-        ("друг", "friend", "A1"),
-        ("ім'я", "name", "A1"),
-        ("місто", "city", "A1"),
+        ("привіт", "hello", "A1"), ("так", "yes", "A1"), ("ні", "no", "A1"),
+        ("дякую", "thank you", "A1"), ("будь ласка", "please", "A1"),
+        ("вода", "water", "A1"), ("хліб", "bread", "A1"), ("молоко", "milk", "A1"),
+        ("яблуко", "apple", "A1"), ("кіт", "cat", "A1"), ("собака", "dog", "A1"),
+        ("будинок", "house", "A1"), ("день", "day", "A1"), ("ніч", "night", "A1"),
+        ("мама", "mother", "A1"), ("тато", "father", "A1"), ("дитина", "child", "A1"),
+        ("один", "one", "A1"), ("два", "two", "A1"), ("три", "three", "A1"),
+        ("великий", "big", "A1"), ("малий", "small", "A1"), ("добрий", "good", "A1"),
+        ("поганий", "bad", "A1"), ("їжа", "food", "A1"), ("школа", "school", "A1"),
+        ("друг", "friend", "A1"), ("ім'я", "name", "A1"), ("місто", "city", "A1"),
         ("країна", "country", "A1"),
-        # ── A2 — Elementary (30 words) ──────────────────────────────
-        ("добрий ранок", "good morning", "A2"),
-        ("на добраніч", "good night", "A2"),
-        ("сім'я", "family", "A2"),
-        ("книга", "book", "A2"),
-        ("стіл", "table", "A2"),
-        ("стілець", "chair", "A2"),
-        ("вікно", "window", "A2"),
-        ("двері", "door", "A2"),
-        ("машина", "car", "A2"),
-        ("любов", "love", "A2"),
-        ("час", "time", "A2"),
-        ("робота", "work", "A2"),
-        ("гроші", "money", "A2"),
-        ("магазин", "shop", "A2"),
-        ("лікар", "doctor", "A2"),
-        ("вчитель", "teacher", "A2"),
-        ("музика", "music", "A2"),
-        ("фільм", "movie", "A2"),
-        ("погода", "weather", "A2"),
-        ("дощ", "rain", "A2"),
-        ("сонце", "sun", "A2"),
-        ("подорож", "journey", "A2"),
-        ("квитки", "tickets", "A2"),
-        ("сніданок", "breakfast", "A2"),
-        ("обід", "lunch", "A2"),
-        ("вечеря", "dinner", "A2"),
-        ("дорога", "road", "A2"),
-        ("тварина", "animal", "A2"),
-        ("квітка", "flower", "A2"),
-        ("дерево", "tree", "A2"),
-        # ── B1 — Intermediate (30 words) ────────────────────────────
-        ("незважаючи на", "despite", "B1"),
-        ("однак", "however", "B1"),
-        ("отже", "therefore", "B1"),
-        ("насправді", "actually", "B1"),
-        ("очевидно", "obviously", "B1"),
-        ("можливо", "perhaps", "B1"),
-        ("зрештою", "eventually", "B1"),
-        ("здебільшого", "mostly", "B1"),
-        ("зазвичай", "usually", "B1"),
-        ("визначати", "determine", "B1"),
-        ("досягати", "achieve", "B1"),
-        ("порівнювати", "compare", "B1"),
-        ("враження", "impression", "B1"),
-        ("досвід", "experience", "B1"),
-        ("середовище", "environment", "B1"),
-        ("розвиток", "development", "B1"),
-        ("суспільство", "society", "B1"),
-        ("уряд", "government", "B1"),
-        ("освіта", "education", "B1"),
-        ("наука", "science", "B1"),
-        ("технологія", "technology", "B1"),
-        ("здоров'я", "health", "B1"),
-        ("подорожувати", "travel", "B1"),
-        ("пояснювати", "explain", "B1"),
-        ("пропонувати", "suggest", "B1"),
-        ("вирішувати", "decide", "B1"),
-        ("помилка", "mistake", "B1"),
-        ("успіх", "success", "B1"),
-        ("різниця", "difference", "B1"),
-        ("важливий", "important", "B1"),
-        # ── B2 — Upper Intermediate (30 words) ──────────────────────
-        ("впливати", "influence", "B2"),
-        ("забезпечувати", "provide", "B2"),
-        ("розглядати", "consider", "B2"),
-        ("стверджувати", "claim", "B2"),
-        ("підтримувати", "maintain", "B2"),
-        ("нести відповідальність", "responsibility", "B2"),
-        ("обставини", "circumstances", "B2"),
-        ("наслідки", "consequences", "B2"),
-        ("сприяти", "contribute", "B2"),
-        ("дослідження", "research", "B2"),
-        ("значний", "significant", "B2"),
-        ("доступний", "available", "B2"),
-        ("ефективний", "efficient", "B2"),
-        ("загрозливий", "threatening", "B2"),
-        ("суперечливий", "controversial", "B2"),
-        ("висновок", "conclusion", "B2"),
-        ("свідомість", "awareness", "B2"),
-        ("прибуток", "profit", "B2"),
-        ("конкуренція", "competition", "B2"),
-        ("стратегія", "strategy", "B2"),
-        ("аналізувати", "analyze", "B2"),
-        ("оцінювати", "evaluate", "B2"),
-        ("реагувати", "react", "B2"),
-        ("передбачати", "predict", "B2"),
-        ("перевага", "advantage", "B2"),
-        ("нерівність", "inequality", "B2"),
-        ("промисловість", "industry", "B2"),
-        ("виробництво", "production", "B2"),
-        ("споживач", "consumer", "B2"),
-        ("ресурс", "resource", "B2"),
-        # ── C1 — Advanced (30 words) ────────────────────────────────
-        ("відшкодування", "compensation", "C1"),
-        ("обґрунтовувати", "substantiate", "C1"),
-        ("передумова", "prerequisite", "C1"),
-        ("невід'ємний", "inherent", "C1"),
-        ("двозначність", "ambiguity", "C1"),
-        ("протиріччя", "contradiction", "C1"),
-        ("наполегливість", "perseverance", "C1"),
-        ("перешкода", "impediment", "C1"),
-        ("виправдовувати", "justify", "C1"),
-        ("зобов'язання", "obligation", "C1"),
-        ("підпорядкований", "subordinate", "C1"),
-        ("доцільний", "expedient", "C1"),
-        ("розбіжність", "discrepancy", "C1"),
-        ("всебічний", "comprehensive", "C1"),
-        ("поступовий", "gradual", "C1"),
-        ("неминучий", "inevitable", "C1"),
-        ("упередження", "prejudice", "C1"),
-        ("виснажливий", "exhausting", "C1"),
-        ("вразливий", "vulnerable", "C1"),
-        ("цілісність", "integrity", "C1"),
-        ("нюанс", "nuance", "C1"),
-        ("парадокс", "paradox", "C1"),
-        ("скептицизм", "skepticism", "C1"),
-        ("прагматичний", "pragmatic", "C1"),
-        ("автономний", "autonomous", "C1"),
-        ("ієрархія", "hierarchy", "C1"),
-        ("контекст", "context", "C1"),
-        ("кореляція", "correlation", "C1"),
-        ("тенденція", "tendency", "C1"),
-        ("динаміка", "dynamics", "C1"),
-        # ── C2 — Mastery (30 words) ─────────────────────────────────
-        ("безпрецедентний", "unprecedented", "C2"),
-        ("недоторканність", "inviolability", "C2"),
-        ("маніпулювання", "manipulation", "C2"),
-        ("юриспруденція", "jurisprudence", "C2"),
-        ("ефемерний", "ephemeral", "C2"),
-        ("квінтесенція", "quintessence", "C2"),
-        ("антагоністичний", "antagonistic", "C2"),
-        ("ідіосинкразія", "idiosyncrasy", "C2"),
-        ("екстраполювати", "extrapolate", "C2"),
-        ("сублімація", "sublimation", "C2"),
-        ("трансцендентний", "transcendent", "C2"),
-        ("когерентність", "coherence", "C2"),
-        ("дихотомія", "dichotomy", "C2"),
-        ("ретроспективний", "retrospective", "C2"),
-        ("гомогенний", "homogeneous", "C2"),
-        ("іманентний", "immanent", "C2"),
-        ("синергія", "synergy", "C2"),
-        ("репрезентативний", "representative", "C2"),
-        ("перипетія", "vicissitude", "C2"),
-        ("конотація", "connotation", "C2"),
-        ("аксіома", "axiom", "C2"),
-        ("детермінізм", "determinism", "C2"),
-        ("амбівалентний", "ambivalent", "C2"),
-        ("прерогатива", "prerogative", "C2"),
-        ("рудиментарний", "rudimentary", "C2"),
-        ("фундаментальний", "fundamental", "C2"),
-        ("мікрокосм", "microcosm", "C2"),
-        ("макрокосм", "macrocosm", "C2"),
-        ("абстракція", "abstraction", "C2"),
-        ("тривіальний", "trivial", "C2"),
+        ("добрий ранок", "good morning", "A2"), ("сім'я", "family", "A2"),
+        ("книга", "book", "A2"), ("стіл", "table", "A2"), ("машина", "car", "A2"),
+        ("любов", "love", "A2"), ("час", "time", "A2"), ("робота", "work", "A2"),
+        ("незважаючи на", "despite", "B1"), ("однак", "however", "B1"),
+        ("отже", "therefore", "B1"), ("досвід", "experience", "B1"),
+        ("суспільство", "society", "B1"), ("уряд", "government", "B1"),
+        ("освіта", "education", "B1"), ("наука", "science", "B1"),
+        ("впливати", "influence", "B2"), ("забезпечувати", "provide", "B2"),
+        ("розглядати", "consider", "B2"), ("дослідження", "research", "B2"),
+        ("значний", "significant", "B2"), ("стратегія", "strategy", "B2"),
+        ("відшкодування", "compensation", "C1"), ("передумова", "prerequisite", "C1"),
+        ("двозначність", "ambiguity", "C1"), ("парадокс", "paradox", "C1"),
+        ("безпрецедентний", "unprecedented", "C2"), ("квінтесенція", "quintessence", "C2"),
+        ("дихотомія", "dichotomy", "C2"), ("фундаментальний", "fundamental", "C2"),
     ]
 
     with get_db() as session:

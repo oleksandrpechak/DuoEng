@@ -33,13 +33,12 @@ class ScoreResult:
 
 
 class LLMScorer:
-    """LLM scoring with timeout, cache, and fallback matching.
+    """LLM scoring with timeout, cache, dictionary-first lookup, and fallback matching.
 
-    Scoring modes:
-      - "describe": Player describes the meaning of an English word.
-        LLM judges YES (1 point) or NO (0 points).
-      - "translate" (legacy): Player translates UA→EN.
-        Exact match = 2 pts, partial = 1 pt, wrong = 0 pts.
+    Scoring pipeline for description mode:
+      1. Check LLM cache (instant)
+      2. Check local dictionary (fast DB lookup, ~5ms)
+      3. AI fallback only if word not in dictionary (slower, ~2-4s)
     """
 
     def __init__(self) -> None:
@@ -128,6 +127,64 @@ class LLMScorer:
                     "expires_at": expires_at,
                 },
             )
+
+    # ------------------------------------------------------------------
+    # Dictionary-first lookup (fast, ~5ms)
+    # ------------------------------------------------------------------
+
+    def dictionary_check(self, ua_word: str, player_answer: str) -> Optional[bool]:
+        """Check dictionary_entries table for a match.
+
+        Returns True if answer matches, False if word exists but answer doesn't match,
+        None if word not found in dictionary at all (use AI fallback).
+        """
+        normalized_answer = player_answer.strip().lower()
+        normalized_ua = ua_word.strip().lower()
+
+        if not normalized_answer or not normalized_ua:
+            return None
+
+        with get_db() as session:
+            # Direct exact match: does this Ukrainian word have this exact English translation?
+            row = session.execute(
+                text(
+                    "SELECT en_word FROM dictionary_entries "
+                    "WHERE LOWER(ua_word) = :ua AND LOWER(en_word) = :en "
+                    "LIMIT 1"
+                ),
+                {"ua": normalized_ua, "en": normalized_answer},
+            ).mappings().first()
+
+            if row:
+                return True  # Exact match found
+
+            # Get all English translations for this Ukrainian word
+            rows = session.execute(
+                text(
+                    "SELECT en_word FROM dictionary_entries "
+                    "WHERE LOWER(ua_word) = :ua "
+                    "LIMIT 20"
+                ),
+                {"ua": normalized_ua},
+            ).mappings().all()
+
+            if rows:
+                # Word exists in dictionary — check if any translation is close enough
+                for r in rows:
+                    en = r["en_word"].lower().strip()
+                    # Contains match (e.g. "dog" in "hot dog", or answer "automobile" contains "auto")
+                    if normalized_answer in en or en in normalized_answer:
+                        return True
+                    # Token overlap for multi-word translations
+                    en_tokens = set(en.split())
+                    answer_tokens = set(normalized_answer.split())
+                    if en_tokens and answer_tokens:
+                        overlap = len(en_tokens & answer_tokens)
+                        if overlap >= min(len(en_tokens), len(answer_tokens)):
+                            return True
+                return False  # Word found in dictionary but answer doesn't match any translation
+
+            return None  # Word not in dictionary — use AI fallback
 
     # ------------------------------------------------------------------
     # Translation mode helpers (legacy, kept for backward compat)
@@ -233,13 +290,34 @@ class LLMScorer:
         return ScoreResult(score=0, source="llm", used_llm=True)
 
     async def score_description(self, word: str, description: str, ua_word: str = "") -> ScoreResult:
-        """Score a player's English response for a Ukrainian word. Returns 1 (correct) or 0 (wrong)."""
+        """Score a player's English response for a Ukrainian word.
+
+        Pipeline:
+          1. Check LLM cache (instant if cached)
+          2. Check dictionary (fast DB lookup, ~5ms)
+          3. AI fallback only if word not in dictionary (slower, ~2-4s)
+
+        Returns ScoreResult with score 1 (correct) or 0 (wrong).
+        """
         key = self._cache_key(f"{ua_word}:{word}" if ua_word else word, description)
         cached = self._load_cached(key)
         if cached:
             return cached
 
-        # Try LLM first
+        # STEP 2: Dictionary lookup (fast)
+        if ua_word:
+            dict_result = self.dictionary_check(ua_word, description)
+            if dict_result is True:
+                result = ScoreResult(score=1, source="dictionary", used_llm=False)
+                self._store_cached(key, result)
+                return result
+            elif dict_result is False:
+                result = ScoreResult(score=0, source="dictionary", used_llm=False)
+                self._store_cached(key, result)
+                return result
+            # dict_result is None → word not in dictionary, fall through to AI
+
+        # STEP 3: AI fallback
         try:
             llm_result = await asyncio.wait_for(
                 self._call_llm_describe(word, description, ua_word=ua_word),
