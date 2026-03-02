@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Clock, Trophy, CheckCircle2, XCircle, AlertCircle, Send, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import CefrBadge from "@/components/CefrBadge";
 
 export default function GamePage() {
   const navigate = useNavigate();
@@ -29,22 +30,18 @@ export default function GamePage() {
       const response = await api.get(`/rooms/${code}/state`);
       setGameState(response.data);
 
-      // Update last feedback
       if (response.data.last_feedback) {
         setLastFeedback(response.data.last_feedback);
       }
 
-      // If game finished, navigate to end page
       if (response.data.status === "finished") {
         navigate(`/end/${code}`);
       }
 
-      // If still waiting, go back to lobby
       if (response.data.status === "waiting") {
         navigate(`/lobby/${code}`);
       }
 
-      // If it's our turn, focus input
       const myPlayer = response.data.players.find(p => p.user_id === userId);
       if (myPlayer?.is_current_turn && inputRef.current) {
         inputRef.current.focus();
@@ -56,8 +53,6 @@ export default function GamePage() {
 
   useEffect(() => {
     fetchGameState();
-
-    // Poll every 2 seconds
     const interval = setInterval(fetchGameState, 2000);
     return () => clearInterval(interval);
   }, [fetchGameState]);
@@ -74,15 +69,12 @@ export default function GamePage() {
 
       const { points, feedback, correct_answer, game_over } = response.data;
 
-      // Show feedback toast
       if (feedback === "correct") {
-        toast.success(`Correct! +${points} points`);
-      } else if (feedback === "partial") {
-        toast.info(`Partial match! +${points} point. Answer was: ${correct_answer}`);
+        toast.success(`Great description! +${points} point`);
       } else if (feedback === "expired") {
-        toast.error(`Time expired! Correct answer: ${correct_answer}`);
+        toast.error(`Time expired! The word was: ${correct_answer}`);
       } else {
-        toast.error(`Wrong! Correct answer: ${correct_answer}`);
+        toast.error(`Not accepted. The word was: ${correct_answer}`);
       }
 
       setAnswer("");
@@ -90,7 +82,6 @@ export default function GamePage() {
       if (game_over) {
         navigate(`/end/${code}`);
       } else {
-        // Refresh state
         await fetchGameState();
       }
     } catch (error) {
@@ -113,10 +104,9 @@ export default function GamePage() {
 
   return (
     <div className="min-h-screen bg-background flex flex-col p-4" data-testid="game-page">
-      {/* Header */}
       <div className="max-w-md mx-auto w-full">
-        {/* Mode Badge */}
-        <div className="flex justify-center mb-4">
+        {/* Mode & Level Badges */}
+        <div className="flex justify-center gap-2 mb-4">
           <span className={`px-4 py-1 rounded-full text-sm font-medium ${
             gameState.mode === "challenge" 
               ? "bg-secondary/20 text-secondary-foreground" 
@@ -124,13 +114,13 @@ export default function GamePage() {
           }`}>
             {gameState.mode === "challenge" ? "Challenge Mode" : "Classic Mode"}
           </span>
+          <CefrBadge level={gameState.word_level || "B1"} className="text-sm px-4 py-1" />
         </div>
 
         {/* Scoreboard */}
         <Card className="rounded-3xl shadow-soft border-0 mb-4" data-testid="scoreboard">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
-              {/* Player 1 (You) */}
               <div className={`flex-1 text-center p-3 rounded-2xl transition-all ${
                 isMyTurn ? "bg-primary/10" : ""
               }`}>
@@ -146,7 +136,6 @@ export default function GamePage() {
                 </p>
               </div>
 
-              {/* VS */}
               <div className="px-4">
                 <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
                   <Trophy className="w-5 h-5 text-muted-foreground" />
@@ -156,7 +145,6 @@ export default function GamePage() {
                 </p>
               </div>
 
-              {/* Player 2 (Opponent) */}
               <div className={`flex-1 text-center p-3 rounded-2xl transition-all ${
                 opponent?.is_current_turn ? "bg-secondary/10" : ""
               }`}>
@@ -196,12 +184,17 @@ export default function GamePage() {
           <CardContent className="p-8 text-center">
             {isMyTurn && gameState.current_turn ? (
               <>
-                <p className="text-sm text-muted-foreground mb-2">Translate to English:</p>
+                <p className="text-sm text-muted-foreground mb-2">Describe this word:</p>
                 <p className="font-heading text-4xl sm:text-5xl font-bold text-foreground animate-fade-in-up" data-testid="word-display">
-                  {gameState.current_turn.word_ua}
+                  {gameState.current_turn.word_en || gameState.current_turn.word_ua}
                 </p>
+                {gameState.current_turn.word_ua && gameState.current_turn.word_en && (
+                  <p className="text-sm text-muted-foreground mt-3">
+                    🇺🇦 {gameState.current_turn.word_ua}
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground mt-4">
-                  Exact answer = +2 pts | Description = +1 pt
+                  Describe the meaning in your own words • +1 pt if accepted
                 </p>
               </>
             ) : (
@@ -222,7 +215,7 @@ export default function GamePage() {
               <Input
                 ref={inputRef}
                 data-testid="answer-input"
-                placeholder="Type your answer..."
+                placeholder="Describe the word meaning..."
                 value={answer}
                 onChange={(e) => setAnswer(e.target.value)}
                 className="rounded-full h-14 px-6 text-lg flex-1"
@@ -249,18 +242,15 @@ export default function GamePage() {
         {lastFeedback && (
           <Card className={`rounded-2xl border-0 mb-4 ${
             lastFeedback.status === "expired" ? "bg-destructive/10" :
-            lastFeedback.points === 2 ? "bg-accent/30" :
-            lastFeedback.points === 1 ? "bg-primary/10" :
+            lastFeedback.points >= 1 ? "bg-accent/30" :
             "bg-destructive/10"
           }`} data-testid="feedback-card">
             <CardContent className="p-4">
               <div className="flex items-start gap-3">
                 {lastFeedback.status === "expired" ? (
                   <AlertCircle className="w-5 h-5 text-destructive-foreground flex-shrink-0 mt-0.5" />
-                ) : lastFeedback.points === 2 ? (
+                ) : lastFeedback.points >= 1 ? (
                   <CheckCircle2 className="w-5 h-5 text-accent-foreground flex-shrink-0 mt-0.5" />
-                ) : lastFeedback.points === 1 ? (
-                  <AlertCircle className="w-5 h-5 text-primary-foreground flex-shrink-0 mt-0.5" />
                 ) : (
                   <XCircle className="w-5 h-5 text-destructive-foreground flex-shrink-0 mt-0.5" />
                 )}
@@ -269,10 +259,10 @@ export default function GamePage() {
                     {lastFeedback.player_nickname}'s turn:
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    {lastFeedback.word_ua} → {lastFeedback.correct_en}
+                    Word: {lastFeedback.correct_en}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Answer: "{lastFeedback.answer}" • 
+                    Description: "{lastFeedback.answer}" • 
                     {lastFeedback.status === "expired" ? " Time expired" : ` +${lastFeedback.points} pts`}
                   </p>
                 </div>

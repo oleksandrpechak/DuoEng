@@ -18,6 +18,7 @@ from .logging_utils import configure_logging
 from .metrics import CONTENT_TYPE_LATEST, REQUESTS_TOTAL, generate_latest
 from .rate_limit import SlidingWindowLimiter
 from .routers.ai import router as ai_router
+from .routers.oauth import router as oauth_router
 from .routers.word_levels import router as word_levels_router
 from .schemas import (
     AdminSeedRequest,
@@ -198,6 +199,7 @@ async def create_room(
         mode=payload.mode,
         target_score=payload.target_score,
         ip=_client_ip_from_request(request),
+        word_level=payload.word_level,
     )
     return JoinRoomResponse(**result)
 
@@ -257,8 +259,11 @@ async def submit_move_legacy(
 
 
 @api_router.get("/leaderboard", response_model=list[LeaderboardItem])
-async def leaderboard(limit: int = Query(default=20, ge=1, le=100)) -> list[LeaderboardItem]:
-    rows = service.leaderboard(limit)
+async def leaderboard(
+    limit: int = Query(default=20, ge=1, le=100),
+    period: str = Query(default="all", pattern="^(today|week|all)$"),
+) -> list[LeaderboardItem]:
+    rows = service.leaderboard(limit, period=period)
     return [LeaderboardItem(**row) for row in rows]
 
 
@@ -271,9 +276,20 @@ async def player_stats(
     return PlayerStatsResponse(**stats)
 
 
+@api_router.get("/players/{player_id}/history")
+async def player_history(
+    player_id: str,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=10, ge=1, le=50),
+    auth: AuthContext = Depends(_auth_user_from_header),
+) -> dict:
+    return service.player_match_history(player_id, page=page, per_page=per_page)
+
+
 @api_router.get("/dictionary/search", response_model=list[DictionaryEntryItem])
 async def dictionary_search(
     q: str = Query(..., min_length=1, max_length=80),
+    level: Optional[str] = Query(default=None, pattern="^(A1|A2|B1|B2|C1|C2)$"),
     auth: AuthContext = Depends(_auth_user_from_header),
 ) -> list[DictionaryEntryItem]:
     _ = auth
@@ -281,25 +297,39 @@ async def dictionary_search(
     if not normalized:
         return []
 
+    # Build optional level filter via LEFT JOIN to the words table.
+    level_join = ""
+    level_clause = ""
+    level_select = ", w.level AS level"
+    params: dict[str, object] = {"prefix": f"{normalized}%", "exact": normalized}
+
+    # Always join words to get the CEFR level for each entry.
+    level_join = "LEFT JOIN words w ON LOWER(d.en_word) = LOWER(w.en)"
+
+    if level:
+        level_clause = "AND w.level = :level"
+        params["level"] = level.upper()
+
     with get_db() as session:
         rows = session.execute(
             text(
-                """
-                SELECT ua_word, en_word, part_of_speech, source
-                FROM dictionary_entries
-                WHERE en_word LIKE :prefix OR ua_word LIKE :prefix
+                f"""
+                SELECT d.ua_word, d.en_word, d.part_of_speech, d.source {level_select}
+                FROM dictionary_entries d
+                {level_join}
+                WHERE (d.en_word LIKE :prefix OR d.ua_word LIKE :prefix) {level_clause}
                 ORDER BY
-                    CASE WHEN en_word = :exact OR ua_word = :exact THEN 0 ELSE 1 END,
-                    CASE WHEN en_word LIKE :prefix THEN 0 ELSE 1 END,
-                    en_word ASC,
-                    ua_word ASC
+                    CASE WHEN d.en_word = :exact OR d.ua_word = :exact THEN 0 ELSE 1 END,
+                    CASE WHEN d.en_word LIKE :prefix THEN 0 ELSE 1 END,
+                    d.en_word ASC,
+                    d.ua_word ASC
                 LIMIT 20
                 """
             ),
-            {"prefix": f"{normalized}%", "exact": normalized},
+            params,
         ).mappings().all()
 
-    return [DictionaryEntryItem(**row) for row in rows]
+    return [DictionaryEntryItem(**dict(row)) for row in rows]
 
 
 @api_router.post("/admin/batch-seed")
@@ -334,6 +364,7 @@ async def metrics(auth: AuthContext = Depends(_auth_user_from_header)) -> Respon
 
 
 api_router.include_router(ai_router)
+api_router.include_router(oauth_router)
 app.include_router(word_levels_router)
 app.include_router(api_router)
 
@@ -460,7 +491,7 @@ async def websocket_room(websocket: WebSocket, room_code: str) -> None:
             await ws_manager.broadcast_room_state(room_code.upper(), _state_provider)
             await ws_manager.broadcast(
                 room_code.upper(),
-                {"type": "leaderboard", "data": service.leaderboard(10)},
+                {"type": "leaderboard", "data": service.leaderboard(10, period="all")},
             )
             await ws_manager.send_to_player(room_code.upper(), auth.player_id, {"type": "submit_ack", "data": result})
 

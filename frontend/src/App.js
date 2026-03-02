@@ -7,6 +7,7 @@ import LandingPage from "@/pages/LandingPage";
 import LobbyPage from "@/pages/LobbyPage";
 import GamePage from "@/pages/GamePage";
 import EndPage from "@/pages/EndPage";
+import JoinPage from "@/pages/JoinPage";
 import WordLevelsPage from "@/pages/WordLevelsPage";
 
 function App() {
@@ -19,6 +20,7 @@ function App() {
           </div>
           <Routes>
             <Route path="/" element={<LandingPage />} />
+            <Route path="/join/:roomCode" element={<JoinPage />} />
             <Route path="/word-levels" element={<WordLevelsPage />} />
             <Route path="/lobby/:code" element={<LobbyPage />} />
             <Route path="/game/:code" element={<GamePage />} />

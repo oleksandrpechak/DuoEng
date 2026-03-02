@@ -2,9 +2,10 @@ import { useState, useEffect, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Copy, Users, Clock, Target, Loader2 } from "lucide-react";
+import { Copy, Users, Clock, Target, Loader2, Share2, Link2, BookOpen } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import CefrBadge from "@/components/CefrBadge";
 
 export default function LobbyPage() {
   const navigate = useNavigate();
@@ -14,6 +15,8 @@ export default function LobbyPage() {
 
   const userId = sessionStorage.getItem("userId");
   const accessToken = sessionStorage.getItem("accessToken");
+
+  const roomLink = `${window.location.origin}/join/${code}`;
 
   const fetchGameState = useCallback(async () => {
     if (!userId || !accessToken) {
@@ -25,11 +28,9 @@ export default function LobbyPage() {
       const response = await api.get(`/rooms/${code}/state`);
       setGameState(response.data);
 
-      // If game has started, navigate to game page
       if (response.data.status === "playing") {
         navigate(`/game/${code}`);
       }
-      // If game somehow already finished, go to end
       if (response.data.status === "finished") {
         navigate(`/end/${code}`);
       }
@@ -42,8 +43,6 @@ export default function LobbyPage() {
 
   useEffect(() => {
     fetchGameState();
-
-    // Poll every 2 seconds
     const interval = setInterval(fetchGameState, 2000);
     return () => clearInterval(interval);
   }, [fetchGameState]);
@@ -51,6 +50,27 @@ export default function LobbyPage() {
   const copyCode = () => {
     navigator.clipboard.writeText(code);
     toast.success("Room code copied!");
+  };
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(roomLink);
+    toast.success("Room link copied!");
+  };
+
+  const shareRoom = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: "DuoVocab Duel — Join my game!",
+          text: `Join my vocabulary duel! Room code: ${code}`,
+          url: roomLink,
+        });
+      } catch {
+        // User cancelled
+      }
+    } else {
+      copyLink();
+    }
   };
 
   if (isLoading) {
@@ -66,7 +86,7 @@ export default function LobbyPage() {
       <Card className="w-full max-w-md rounded-3xl shadow-soft border-0" data-testid="lobby-card">
         <CardHeader className="text-center">
           <CardTitle className="font-heading text-2xl">Waiting for Opponent</CardTitle>
-          <CardDescription>Share the room code with your friend</CardDescription>
+          <CardDescription>Share the room code or link with your friend</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Room Code Display */}
@@ -80,12 +100,31 @@ export default function LobbyPage() {
               <span className="font-heading text-3xl tracking-widest font-bold">{code}</span>
               <Copy className="w-5 h-5 text-muted-foreground" />
             </div>
-            <p className="text-xs text-muted-foreground mt-2">Click to copy</p>
+            <p className="text-xs text-muted-foreground mt-2">Click to copy code</p>
+          </div>
+
+          {/* Share Buttons */}
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              className="flex-1 rounded-full h-10 text-sm"
+              onClick={copyLink}
+            >
+              <Link2 className="w-4 h-4 mr-2" />
+              Copy Link
+            </Button>
+            <Button
+              className="flex-1 rounded-full h-10 text-sm bg-primary hover:bg-primary/90"
+              onClick={shareRoom}
+            >
+              <Share2 className="w-4 h-4 mr-2" />
+              Share
+            </Button>
           </div>
 
           {/* Game Settings */}
           {gameState && (
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-3">
               <div className="flex items-center gap-3 p-4 bg-primary/10 rounded-2xl">
                 <Clock className="w-5 h-5 text-primary-foreground" />
                 <div>
@@ -98,6 +137,13 @@ export default function LobbyPage() {
                 <div>
                   <p className="text-xs text-muted-foreground">Target</p>
                   <p className="font-medium">{gameState.target_score} pts</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 p-4 bg-muted rounded-2xl">
+                <BookOpen className="w-5 h-5 text-muted-foreground" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Level</p>
+                  <CefrBadge level={gameState.word_level || "B1"} short />
                 </div>
               </div>
             </div>
@@ -132,7 +178,6 @@ export default function LobbyPage() {
                 </div>
               ))}
 
-              {/* Waiting slot */}
               {gameState?.players?.length === 1 && (
                 <div className="flex items-center gap-3 p-4 bg-muted/50 rounded-2xl border border-dashed border-border animate-pulse-soft">
                   <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">

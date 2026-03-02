@@ -24,12 +24,15 @@ class CreateRoomRequest(BaseModel):
 
     mode: Literal["classic", "challenge"] = "classic"
     target_score: int = Field(default=10, ge=1, le=100)
+    word_level: Literal["A1", "A2", "B1", "B2", "C1", "C2"] = "B1"
 
 
 class JoinRoomResponse(BaseModel):
     room_code: str
     code: str
     status: str
+    room_link: Optional[str] = None
+    word_level: Optional[str] = None
 
 
 class SubmitAnswerRequest(BaseModel):
@@ -66,8 +69,10 @@ class RoomStateResponse(BaseModel):
     target_score: int
     turn_number: int
     turn_timeout_seconds: int
+    word_level: str = "B1"
     players: list[PlayerState]
     current_word_ua: Optional[str] = None
+    current_word_en: Optional[str] = None
     current_turn_player_id: Optional[str] = None
     turn_started_at: Optional[str] = None
     match_id: Optional[str] = None
@@ -106,6 +111,7 @@ class DictionaryEntryItem(BaseModel):
     en_word: str
     part_of_speech: Optional[str] = None
     source: str
+    level: Optional[str] = None
 
 
 class AdminSeedRequest(BaseModel):

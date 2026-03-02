@@ -21,6 +21,9 @@ from .metrics import LLM_CALLS_TOTAL, LLM_TIMEOUTS_TOTAL
 
 logger = logging.getLogger("duoeng.scoring")
 
+# Hard timeout for LLM calls (seconds)
+LLM_HARD_TIMEOUT = 4.0
+
 
 @dataclass(frozen=True)
 class ScoreResult:
@@ -30,7 +33,14 @@ class ScoreResult:
 
 
 class LLMScorer:
-    """LLM scoring with timeout, cache, and fallback matching."""
+    """LLM scoring with timeout, cache, and fallback matching.
+
+    Scoring modes:
+      - "describe": Player describes the meaning of an English word.
+        LLM judges YES (1 point) or NO (0 points).
+      - "translate" (legacy): Player translates UA→EN.
+        Exact match = 2 pts, partial = 1 pt, wrong = 0 pts.
+    """
 
     def __init__(self) -> None:
         self._memory_cache: dict[str, tuple[float, ScoreResult]] = {}
@@ -53,7 +63,6 @@ class LLMScorer:
     def _sanitize_for_llm(text: str, max_length: int = 200) -> str:
         """Strip dangerous patterns before embedding user text in an LLM prompt."""
         sanitized = text.strip()[:max_length]
-        # Remove backticks, angle-brackets, common injection prefixes
         sanitized = re.sub(r"[`<>]", "", sanitized)
         _injection_patterns = re.compile(
             r"(ignore\s+(all\s+)?previous\s+instructions|system\s*:|assistant\s*:|<\|im_start\|>)",
@@ -120,6 +129,10 @@ class LLMScorer:
                 },
             )
 
+    # ------------------------------------------------------------------
+    # Translation mode helpers (legacy, kept for backward compat)
+    # ------------------------------------------------------------------
+
     def _quick_match(self, correct_answer: str, user_answer: str) -> Optional[ScoreResult]:
         correct = self._normalize(correct_answer)
         answer = self._normalize(user_answer)
@@ -147,6 +160,98 @@ class LLMScorer:
         if jaccard >= 0.5:
             return ScoreResult(score=1, source="fallback_semantic_lite", used_llm=False)
         return ScoreResult(score=0, source="fallback_semantic_lite", used_llm=False)
+
+    # ------------------------------------------------------------------
+    # Description-mode scoring (primary game mode)
+    # ------------------------------------------------------------------
+
+    def _description_fallback(self, word: str, description: str) -> ScoreResult:
+        """Quick keyword-based fallback when LLM is unavailable."""
+        w = self._normalize(word)
+        d = self._normalize(description)
+
+        # If the description literally contains the word, that's a pass
+        if w in d:
+            return ScoreResult(score=1, source="fallback_contains_word", used_llm=False)
+
+        # Check synonym overlap
+        word_synonyms = self._synonyms.get(w, set()) | {w}
+        for syn in word_synonyms:
+            if syn in d:
+                return ScoreResult(score=1, source="fallback_synonym_match", used_llm=False)
+
+        return ScoreResult(score=0, source="fallback_no_match", used_llm=False)
+
+    async def _call_llm_describe(self, word: str, description: str) -> Optional[ScoreResult]:
+        """Call Gemini to judge whether description matches word meaning."""
+        from .services.gemini_service import (
+            GeminiServiceError,
+            generate_text,
+        )
+
+        safe_word = self._sanitize_for_llm(word, max_length=64)
+        safe_desc = self._sanitize_for_llm(description, max_length=200)
+
+        prompt = (
+            f'You are a vocabulary judge. The word is: "{safe_word}". '
+            f'The player\'s description is: "{safe_desc}". '
+            "Does the description correctly explain the meaning of the word? "
+            "Reply with only: YES or NO"
+        )
+
+        LLM_CALLS_TOTAL.inc()
+
+        try:
+            raw = await asyncio.wait_for(
+                generate_text(prompt),
+                timeout=LLM_HARD_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            LLM_TIMEOUTS_TOTAL.inc()
+            logger.warning("LLM describe timeout", extra={"event": "llm_describe_timeout"})
+            return None
+        except GeminiServiceError:
+            logger.warning("LLM describe service error", extra={"event": "llm_describe_error"})
+            return None
+        except Exception:
+            logger.exception("LLM describe call failed", extra={"event": "llm_describe_failed"})
+            return None
+
+        answer = raw.strip().upper()
+        if answer.startswith("YES"):
+            return ScoreResult(score=1, source="llm", used_llm=True)
+        return ScoreResult(score=0, source="llm", used_llm=True)
+
+    async def score_description(self, word: str, description: str) -> ScoreResult:
+        """Score a player's description of an English word. Returns 1 (correct) or 0 (wrong)."""
+        key = self._cache_key(word, description)
+        cached = self._load_cached(key)
+        if cached:
+            return cached
+
+        # Try LLM first
+        try:
+            llm_result = await asyncio.wait_for(
+                self._call_llm_describe(word, description),
+                timeout=LLM_HARD_TIMEOUT + 1.0,
+            )
+        except asyncio.TimeoutError:
+            LLM_TIMEOUTS_TOTAL.inc()
+            logger.warning("LLM hard timeout in score_description()", extra={"event": "llm_hard_timeout"})
+            llm_result = None
+
+        if llm_result:
+            self._store_cached(key, llm_result)
+            return llm_result
+
+        # Fallback
+        fallback = self._description_fallback(word, description)
+        self._store_cached(key, fallback)
+        return fallback
+
+    # ------------------------------------------------------------------
+    # Legacy translation scoring (kept for backward compat)
+    # ------------------------------------------------------------------
 
     async def _call_llm(self, correct_answer: str, user_answer: str) -> Optional[ScoreResult]:
         if not settings.enable_llm_scoring or not settings.llm_api_url:
@@ -205,6 +310,7 @@ class LLMScorer:
         return ScoreResult(score=score_value, source="llm", used_llm=True)
 
     async def score(self, correct_answer: str, user_answer: str) -> ScoreResult:
+        """Legacy translation scoring."""
         key = self._cache_key(correct_answer, user_answer)
         cached = self._load_cached(key)
         if cached:
@@ -215,7 +321,6 @@ class LLMScorer:
             self._store_cached(key, quick)
             return quick
 
-        # Hard deadline: never let LLM block game flow longer than configured timeout + 1s.
         try:
             llm_result = await asyncio.wait_for(
                 self._call_llm(correct_answer, user_answer),

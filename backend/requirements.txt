@@ -4,6 +4,7 @@ fastapi==0.115.6
 google-auth>=2.35.0,<3.0.0
 google-genai>=0.8.0,<2.0.0
 gunicorn==23.0.0
+httpx>=0.25.0,<1.0.0
 psycopg2-binary==2.9.10
 prometheus-client==0.21.1
 PyJWT==2.10.1

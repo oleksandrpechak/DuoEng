@@ -244,8 +244,23 @@ class GameService:
             {"room_code": room_code.upper()},
         )
 
-    def _pick_random_word(self, session: Session) -> Mapping[str, Any]:
-        row = self._one(session, "SELECT ua, en FROM words ORDER BY RANDOM() LIMIT 1")
+    def _pick_random_word(self, session: Session, word_level: str = "B1") -> Mapping[str, Any]:
+        row = self._one(
+            session,
+            "SELECT ua, en FROM words WHERE level = :level ORDER BY RANDOM() LIMIT 1",
+            {"level": word_level},
+        )
+        if not row:
+            # Fallback to B1 if requested level has no words
+            logger.warning(
+                "No words for level %s, falling back to B1",
+                word_level,
+                extra={"event": "word_level_fallback", "requested_level": word_level},
+            )
+            row = self._one(session, "SELECT ua, en FROM words WHERE level = 'B1' ORDER BY RANDOM() LIMIT 1")
+        if not row:
+            # Last resort: any word at all
+            row = self._one(session, "SELECT ua, en FROM words ORDER BY RANDOM() LIMIT 1")
         if not row:
             raise HTTPException(status_code=500, detail="No words available")
         return row
@@ -346,7 +361,8 @@ class GameService:
         if not next_player_id:
             return
 
-        word = self._pick_random_word(session)
+        word_level = room.get("word_level") or "B1"
+        word = self._pick_random_word(session, word_level=word_level)
         next_turn_number = int(room["turn_number"]) + 1
         session.execute(
             text(
@@ -468,7 +484,7 @@ class GameService:
             )
 
     # ---------- Public game operations ----------
-    def create_room(self, player_id: str, mode: str, target_score: int, ip: str) -> dict[str, Any]:
+    def create_room(self, player_id: str, mode: str, target_score: int, ip: str, word_level: str = "B1") -> dict[str, Any]:
         with get_db() as session:
             self._ensure_not_banned(session, player_id, ip)
 
@@ -489,9 +505,10 @@ class GameService:
                             """
                             INSERT INTO rooms (
                                 code, created_at, status, current_turn, turn_started_at,
-                                mode, target_score, turn_number
+                                mode, target_score, turn_number, word_level
                             ) VALUES (
-                                :code, :created_at, 'waiting', NULL, NULL, :mode, :target_score, 0
+                                :code, :created_at, 'waiting', NULL, NULL,
+                                :mode, :target_score, 0, :word_level
                             )
                             """
                         ),
@@ -500,6 +517,7 @@ class GameService:
                             "created_at": _utc_now(),
                             "mode": mode,
                             "target_score": target_score,
+                            "word_level": word_level,
                         },
                     )
                     code = candidate
@@ -521,7 +539,13 @@ class GameService:
                 {"room_code": code, "player_id": player_id, "joined_at": _utc_now()},
             )
 
-        return {"room_code": code, "code": code, "status": "waiting"}
+        return {
+            "room_code": code,
+            "code": code,
+            "status": "waiting",
+            "room_link": f"{settings.frontend_url}/join/{code}",
+            "word_level": word_level,
+        }
 
     def join_room(self, room_code: str, player_id: str, ip: str) -> dict[str, Any]:
         normalized_code = room_code.upper()
@@ -573,7 +597,8 @@ class GameService:
             if player_count + 1 == 2 and room["status"] == "waiting":
                 players = self._fetch_room_players(session, normalized_code)
                 match_id = str(uuid.uuid4())
-                word = self._pick_random_word(session)
+                word_level = room.get("word_level") or "B1"
+                word = self._pick_random_word(session, word_level=word_level)
                 turn_player_id = players[0]["player_id"]
 
                 session.execute(
@@ -617,7 +642,13 @@ class GameService:
                 )
 
             status = self._fetch_room(session, normalized_code)["status"]
-            return {"room_code": normalized_code, "code": normalized_code, "status": status}
+            return {
+                "room_code": normalized_code,
+                "code": normalized_code,
+                "status": status,
+                "room_link": f"{settings.frontend_url}/join/{normalized_code}",
+                "word_level": room.get("word_level") or "B1",
+            }
 
     async def submit_answer(
         self,
@@ -679,7 +710,8 @@ class GameService:
                 "response_time": elapsed,
             }
 
-        scoring = await self.scorer.score(turn_snapshot["correct_answer"], answer)
+        # Use description-based scoring: the player describes the English word
+        scoring = await self.scorer.score_description(turn_snapshot["correct_answer"], answer)
 
         with get_db() as session:
             self._ensure_not_banned(session, player_id, ip)
@@ -785,7 +817,7 @@ class GameService:
                 "turn_number": int(room["turn_number"]),
                 "points": scoring.score,
                 "scoring_source": scoring.source,
-                "feedback": "correct" if scoring.score == 2 else ("partial" if scoring.score == 1 else "wrong"),
+                "feedback": "correct" if scoring.score >= 1 else "wrong",
                 "correct_answer": turn_snapshot["correct_answer"],
                 "game_over": game_over,
                 "winner_id": winner_id,
@@ -867,8 +899,10 @@ class GameService:
             ]
 
             visible_word = None
+            visible_word_en = None
             if room["status"] == "playing" and room["current_turn"] == viewer_player_id:
                 visible_word = room["current_word_ua"]
+                visible_word_en = room["current_word_en"]
 
             time_remaining = None
             if room["turn_started_at"] and room["status"] == "playing":
@@ -880,6 +914,7 @@ class GameService:
                 current_turn = {
                     "turn_id": f"{room['match_id']}:{room['turn_number']}",
                     "word_ua": visible_word,
+                    "word_en": visible_word_en,
                     "time_remaining": time_remaining,
                     "current_player_id": room["current_turn"],
                 }
@@ -899,8 +934,10 @@ class GameService:
                 "target_score": room["target_score"],
                 "turn_number": room["turn_number"],
                 "turn_timeout_seconds": settings.turn_timeout_seconds,
+                "word_level": room.get("word_level") or "B1",
                 "players": players,
                 "current_word_ua": visible_word,
+                "current_word_en": visible_word_en,
                 "current_turn_player_id": room["current_turn"],
                 "turn_started_at": turn_started_str,
                 "match_id": room["match_id"],
@@ -910,18 +947,30 @@ class GameService:
                 "last_feedback": last_feedback,
             }
 
-    def leaderboard(self, limit: int) -> list[dict[str, Any]]:
+    def leaderboard(self, limit: int, period: str = "all") -> list[dict[str, Any]]:
         safe_limit = max(1, min(limit, 100))
+
+        # Build time filter
+        time_filter = ""
+        params: dict[str, Any] = {"safe_limit": safe_limit}
+        if period == "today":
+            time_filter = "WHERE total_games > 0 AND created_at >= :since"
+            params["since"] = _utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "week":
+            time_filter = "WHERE total_games > 0 AND created_at >= :since"
+            params["since"] = _utc_now() - timedelta(days=7)
+
         with get_db() as session:
             rows = self._all(
                 session,
-                """
+                f"""
                 SELECT id, nickname, elo, wins, losses, total_games, total_response_time, total_moves
                 FROM players
+                {time_filter}
                 ORDER BY elo DESC, wins DESC, created_at ASC
                 LIMIT :safe_limit
                 """,
-                {"safe_limit": safe_limit},
+                params,
             )
 
         results: list[dict[str, Any]] = []
@@ -979,6 +1028,74 @@ class GameService:
             "win_rate": round(win_rate, 4),
             "avg_response_time": round(avg_response_time, 4),
             "created_at": created_at,
+        }
+
+    def player_match_history(self, player_id: str, page: int = 1, per_page: int = 10) -> dict[str, Any]:
+        offset = (page - 1) * per_page
+        with get_db() as session:
+            # Count total matches
+            total = int(
+                self._scalar(
+                    session,
+                    """
+                    SELECT COUNT(*)
+                    FROM matches
+                    WHERE player_a = :pid OR player_b = :pid
+                    """,
+                    {"pid": player_id},
+                )
+            )
+
+            rows = self._all(
+                session,
+                """
+                SELECT m.id, m.room_code, m.player_a, m.player_b, m.winner_id,
+                       m.started_at, m.finished_at,
+                       pa.nickname AS player_a_nick, pb.nickname AS player_b_nick,
+                       rpa.score AS score_a, rpb.score AS score_b
+                FROM matches m
+                JOIN players pa ON pa.id = m.player_a
+                JOIN players pb ON pb.id = m.player_b
+                LEFT JOIN room_players rpa ON rpa.room_code = m.room_code AND rpa.player_id = m.player_a
+                LEFT JOIN room_players rpb ON rpb.room_code = m.room_code AND rpb.player_id = m.player_b
+                WHERE m.player_a = :pid OR m.player_b = :pid
+                ORDER BY m.started_at DESC
+                LIMIT :per_page OFFSET :offset
+                """,
+                {"pid": player_id, "per_page": per_page, "offset": offset},
+            )
+
+        matches = []
+        for r in rows:
+            opponent_id = r["player_b"] if r["player_a"] == player_id else r["player_a"]
+            opponent_nick = r["player_b_nick"] if r["player_a"] == player_id else r["player_a_nick"]
+            my_score = r["score_a"] if r["player_a"] == player_id else r["score_b"]
+            opp_score = r["score_b"] if r["player_a"] == player_id else r["score_a"]
+
+            started = r["started_at"]
+            if isinstance(started, datetime):
+                started = started.isoformat()
+            finished = r["finished_at"]
+            if isinstance(finished, datetime):
+                finished = finished.isoformat()
+
+            matches.append({
+                "match_id": r["id"],
+                "room_code": r["room_code"],
+                "opponent_id": opponent_id,
+                "opponent_nickname": opponent_nick,
+                "my_score": my_score or 0,
+                "opponent_score": opp_score or 0,
+                "won": r["winner_id"] == player_id,
+                "started_at": started,
+                "finished_at": finished,
+            })
+
+        return {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "matches": matches,
         }
 
     def admin_batch_seed(self, actor: AuthContext, seed_words: bool, reset_stats: bool) -> dict[str, Any]:

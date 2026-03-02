@@ -149,6 +149,9 @@ class Settings:
     word_level_batch_size: int
     word_level_max_words: int
     log_level: str
+    google_client_id: str
+    google_client_secret: str
+    google_redirect_uri: str
 
     @property
     def is_sqlite(self) -> bool:
@@ -226,6 +229,9 @@ settings = Settings(
     word_level_batch_size=max(1, _as_int(os.getenv("WORD_LEVEL_BATCH_SIZE"), 25)),
     word_level_max_words=max(1, _as_int(os.getenv("WORD_LEVEL_MAX_WORDS"), 200)),
     log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
+    google_client_id=os.getenv("GOOGLE_CLIENT_ID", "").strip(),
+    google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET", "").strip(),
+    google_redirect_uri=os.getenv("GOOGLE_REDIRECT_URI", "").strip(),
 )
 
 settings.validate()

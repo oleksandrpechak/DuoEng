@@ -38,6 +38,8 @@ class Player(Base):
     total_response_time: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     total_moves: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    google_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
+    email: Mapped[str | None] = mapped_column(String(256), nullable=True, unique=True)
 
 
 class Room(Base):
@@ -45,6 +47,10 @@ class Room(Base):
     __table_args__ = (
         CheckConstraint("status IN ('waiting', 'playing', 'finished')", name="ck_rooms_status"),
         CheckConstraint("mode IN ('classic', 'challenge')", name="ck_rooms_mode"),
+        CheckConstraint(
+            "word_level IN ('A1', 'A2', 'B1', 'B2', 'C1', 'C2')",
+            name="ck_rooms_word_level",
+        ),
     )
 
     code: Mapped[str] = mapped_column(String(16), primary_key=True)
@@ -58,6 +64,7 @@ class Room(Base):
     current_word_ua: Mapped[str | None] = mapped_column(Text, nullable=True)
     current_word_en: Mapped[str | None] = mapped_column(Text, nullable=True)
     match_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    word_level: Mapped[str] = mapped_column(String(2), nullable=False, default="B1")
 
 
 class RoomPlayer(Base):
@@ -84,7 +91,10 @@ class RoomPlayer(Base):
 
 class Match(Base):
     __tablename__ = "matches"
-    __table_args__ = (Index("ix_matches_room_code", "room_code"),)
+    __table_args__ = (
+        Index("ix_matches_room_code", "room_code"),
+        Index("ix_matches_started_at", "started_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     room_code: Mapped[str] = mapped_column(String(16), ForeignKey("rooms.code"), nullable=False)
@@ -121,7 +131,12 @@ class Move(Base):
 
 class Word(Base):
     __tablename__ = "words"
-    __table_args__ = (CheckConstraint("level IN ('B1', 'B2')", name="ck_words_level"),)
+    __table_args__ = (
+        CheckConstraint(
+            "level IN ('A1', 'A2', 'B1', 'B2', 'C1', 'C2')",
+            name="ck_words_level",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     ua: Mapped[str] = mapped_column(Text, nullable=False)
