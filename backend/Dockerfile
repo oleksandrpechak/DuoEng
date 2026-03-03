@@ -11,7 +11,9 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r /app/requirements.txt
 
+# Bust Docker cache on code changes
 COPY . .
+RUN find /app -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null; true
 RUN chmod +x /app/scripts/start.sh
 RUN useradd --create-home --shell /usr/sbin/nologin appuser && \
     chown -R appuser:appuser /app
