@@ -224,7 +224,7 @@ def seed_from_csv(force: bool = False) -> int:
     seen_word_ids: set[str] = set()
     batch_words: list[dict] = []
     batch_dict: list[dict] = []
-    BATCH_SIZE = 500
+    BATCH_SIZE = 5000 if not is_sqlite else 500
     rows_processed = 0
 
     def flush(session: Session) -> tuple[int, int]:
@@ -239,6 +239,7 @@ def seed_from_csv(force: bool = False) -> int:
             session.execute(text(dict_sql), batch_dict)
             d = len(batch_dict)
             batch_dict = []
+        session.commit()
         return w, d
 
     def _make_word_id(en: str) -> str:
@@ -318,7 +319,7 @@ def seed_from_csv(force: bool = False) -> int:
                         w, d = flush(session)
                         inserted_words += w
                         inserted_dict += d
-                        if rows_processed % 10000 == 0:
+                        if rows_processed % 50000 == 0:
                             logger.info("Seeding progress: %d rows processed", rows_processed)
 
                 # Final flush
@@ -380,7 +381,7 @@ def seed_from_csv(force: bool = False) -> int:
                         w, d = flush(session)
                         inserted_words += w
                         inserted_dict += d
-                        if rows_processed % 10000 == 0:
+                        if rows_processed % 50000 == 0:
                             logger.info("Seeding progress: %d rows processed", rows_processed)
 
                 w, d = flush(session)

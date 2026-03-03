@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from datetime import datetime, timezone
 import logging
@@ -69,13 +70,28 @@ async def startup_event() -> None:
     if settings.is_sqlite:
         # Local dev fallback keeps sqlite bootstrap simple.
         init_db()
-    seeded = seed_sample_words_if_empty()
+
+    # Run seeding in a background thread so the server can bind the port
+    # immediately.  Render (and similar PaaS) will kill the process if no
+    # open port is detected within ~5 minutes.
+    def _background_seed():
+        try:
+            seeded = seed_sample_words_if_empty()
+            logger.info(
+                "Background seed complete",
+                extra={"event": "seed_done", "seeded_words": seeded},
+            )
+        except Exception:
+            logger.exception("Background seeding failed")
+
+    seed_thread = threading.Thread(target=_background_seed, daemon=True)
+    seed_thread.start()
+
     clear_expired_llm_cache()
     logger.info(
-        "Backend startup complete",
+        "Backend startup complete — server ready (seeding continues in background)",
         extra={
             "event": "startup",
-            "seeded_words": seeded,
             "db_backend": "sqlite" if settings.is_sqlite else "postgres",
             "schema_bootstrap": "create_all" if settings.is_sqlite else "alembic",
         },
