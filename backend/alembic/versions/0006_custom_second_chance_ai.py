@@ -1,6 +1,6 @@
 """Add custom_words table, second_chance columns to rooms, ai_difficulty to rooms.
 
-Revision ID: 0006_custom_words_second_chance_ai
+Revision ID: 0006_custom_second_chance_ai
 Revises: 0005_favourite_words
 """
 
@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0006_custom_words_second_chance_ai"
+revision = "0006_custom_second_chance_ai"
 down_revision = "0005_favourite_words"
 branch_labels = None
 depends_on = None

@@ -93,6 +93,33 @@ fi
 # Clear stale bytecode to ensure fresh migration files are used
 find . -path '*/alembic/versions/__pycache__' -exec rm -rf {} + 2>/dev/null || true
 
+# Widen the alembic_version.version_num column if it exists and is too narrow (PG only)
+if [ -n "${DATABASE_URL:-}" ]; then
+  python3 - "${DATABASE_URL}" <<'PY'
+import sys
+from sqlalchemy import create_engine, text
+
+url = sys.argv[1].strip()
+if not url:
+    raise SystemExit(0)
+
+engine = create_engine(url, pool_pre_ping=True)
+if engine.dialect.name != "postgresql":
+    raise SystemExit(0)
+
+with engine.begin() as conn:
+    row = conn.execute(text(
+        "SELECT character_maximum_length FROM information_schema.columns "
+        "WHERE table_name='alembic_version' AND column_name='version_num' AND table_schema='public'"
+    )).scalar()
+    if row is not None and int(row) < 128:
+        conn.execute(text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(128)"))
+        print("[startup] widened alembic_version.version_num to VARCHAR(128)")
+    else:
+        print("[startup] alembic_version.version_num already wide enough (or table absent)")
+PY
+fi
+
 echo "[startup] running database migrations..."
 echo "[startup] alembic current revision:"
 alembic current 2>&1 || true
