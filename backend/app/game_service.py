@@ -1474,7 +1474,7 @@ class GameService:
         with get_db() as session:
             word = self._one(
                 session,
-                "SELECT id, ua, en, level FROM words WHERE id = :word_id",
+                "SELECT id, ua, en, level, definition, example FROM words WHERE id = :word_id",
                 {"word_id": word_id},
             )
             if not word:
@@ -1503,6 +1503,8 @@ class GameService:
             "ua": word["ua"],
             "en": word["en"],
             "level": word["level"],
+            "definition": word.get("definition") or None,
+            "example": word.get("example") or None,
             "added_at": now.isoformat(),
         }
 
@@ -1530,7 +1532,8 @@ class GameService:
             rows = self._all(
                 session,
                 """
-                SELECT fw.id, fw.word_id, w.ua, w.en, w.level, fw.added_at
+                SELECT fw.id, fw.word_id, w.ua, w.en, w.level,
+                       w.definition, w.example, fw.added_at
                 FROM favourite_words fw
                 JOIN words w ON w.id = fw.word_id
                 WHERE fw.player_id = :player_id
@@ -1550,6 +1553,8 @@ class GameService:
                 "ua": row["ua"],
                 "en": row["en"],
                 "level": row["level"],
+                "definition": row.get("definition") or None,
+                "example": row.get("example") or None,
                 "added_at": added_at,
             })
         return results

@@ -118,6 +118,8 @@ class DictionaryEntryItem(BaseModel):
     part_of_speech: Optional[str] = None
     source: str
     level: Optional[str] = None
+    definition: Optional[str] = None
+    example: Optional[str] = None
 
 
 class AdminSeedRequest(BaseModel):
@@ -194,6 +196,8 @@ class FavouriteWordItem(BaseModel):
     ua: str
     en: str
     level: str
+    definition: Optional[str] = None
+    example: Optional[str] = None
     added_at: str
 
 

@@ -73,6 +73,7 @@ def parse_oxford_data() -> list[dict]:
             level = (item.get("cefr") or "B1").strip().upper()
             pos = (item.get("type") or "").strip().lower()
             definition = (item.get("definition") or "").strip()
+            example = (item.get("example") or "").strip()
 
             if not word:
                 continue
@@ -94,6 +95,7 @@ def parse_oxford_data() -> list[dict]:
                 "level": level,
                 "pos": pos,
                 "definition": definition,
+                "example": example,
             })
 
     elif csv_path.exists():
@@ -105,6 +107,7 @@ def parse_oxford_data() -> list[dict]:
                 level = (row.get("cefr") or "B1").strip().upper()
                 pos = (row.get("type") or "").strip().lower()
                 definition = (row.get("definition") or "").strip()
+                example = (row.get("example") or "").strip()
 
                 if not word or " " in word:
                     continue
@@ -119,6 +122,7 @@ def parse_oxford_data() -> list[dict]:
                     "level": level,
                     "pos": pos,
                     "definition": definition,
+                    "example": example,
                 })
     else:
         logger.error(
@@ -292,16 +296,18 @@ async def translate_all_words(oxford_words: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def save_to_csv(words: list[dict], output_path: Path) -> None:
-    """Save processed words to CSV."""
+    """Save processed words to CSV (includes definition + example from Oxford)."""
     with open(output_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["ua_word", "en_word", "level", "part_of_speech"])
+        writer.writerow(["ua_word", "en_word", "level", "part_of_speech", "definition", "example"])
         for w in words:
             writer.writerow([
                 w["ua_word"],
                 w["word"],
                 w["level"],
                 w.get("pos", ""),
+                w.get("definition", ""),
+                w.get("example", ""),
             ])
     logger.info("Saved %d words to %s", len(words), output_path)
 

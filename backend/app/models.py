@@ -147,6 +147,8 @@ class Word(Base):
     ua: Mapped[str] = mapped_column(Text, nullable=False)
     en: Mapped[str] = mapped_column(Text, nullable=False)
     level: Mapped[str] = mapped_column(String(2), nullable=False)
+    definition: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
+    example: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
 
 
 class Ban(Base):
@@ -187,6 +189,8 @@ class DictionaryEntry(Base):
     en_word: Mapped[str] = mapped_column(Text, nullable=False)
     part_of_speech: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
+    definition: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
+    example: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 

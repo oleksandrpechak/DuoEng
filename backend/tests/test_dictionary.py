@@ -51,8 +51,8 @@ def test_dictionary_search_returns_limited_results():
             ),
             [
                 {
-                    "ua_word": f"дерево-{idx}",
-                    "en_word": f"tree{idx:02d}",
+                    "ua_word": f"zztestword-{idx}",
+                    "en_word": f"zztestword{idx:02d}",
                     "part_of_speech": "n",
                     "source": "test",
                 }
@@ -60,10 +60,10 @@ def test_dictionary_search_returns_limited_results():
             ],
         )
 
-    response = client.get("/api/dictionary/search", params={"q": "tree"}, headers=headers)
+    response = client.get("/api/dictionary/search", params={"q": "zztestword"}, headers=headers)
     assert response.status_code == 200
 
     payload = response.json()
     assert len(payload) == 20
-    assert payload[0]["en_word"].startswith("tree")
+    assert payload[0]["en_word"].startswith("zztestword")
     assert payload[0]["source"] == "test"

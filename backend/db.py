@@ -120,9 +120,12 @@ def init_db() -> None:
 # ---------------------------------------------------------------------------
 
 def _find_csv_path() -> str | None:
-    """Locate the best dictionary CSV, preferring Oxford processed data."""
+    """Locate the best dictionary CSV, preferring Oxford enriched/processed data."""
     candidates = [
-        # Oxford 5000 processed data — highest priority
+        # Oxford enriched (with copyright-free definitions) — highest priority
+        Path(__file__).parent / "seeds" / "oxford_enriched.csv",
+        Path(__file__).parent.parent / "seeds" / "oxford_enriched.csv",
+        # Oxford 5000 processed data (translations only) — second priority
         Path(__file__).parent / "seeds" / "oxford_processed.csv",
         Path(__file__).parent.parent / "seeds" / "oxford_processed.csv",
         # Legacy dictionary_clean.csv — fallback only
@@ -192,7 +195,7 @@ def seed_from_csv(force: bool = False) -> int:
         logger.warning("No dictionary CSV found — searched common paths")
         return 0
 
-    is_oxford = "oxford_processed" in csv_path
+    is_oxford = "oxford_processed" in csv_path or "oxford_enriched" in csv_path
     logger.info("Found CSV at: %s (oxford=%s)", csv_path, is_oxford)
 
     with get_db() as session:
@@ -216,25 +219,45 @@ def seed_from_csv(force: bool = False) -> int:
     # For legacy CSV, use DO NOTHING to be safe.
     if is_oxford:
         word_sql = (
-            "INSERT INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level) "
-            "ON CONFLICT (id) DO UPDATE SET ua = :ua, en = :en, level = :level"
+            "INSERT INTO words (id, ua, en, level, definition, example) "
+            "VALUES (:id, :ua, :en, :level, :definition, :example) "
+            "ON CONFLICT (id) DO UPDATE SET ua = :ua, en = :en, level = :level, "
+            "definition = :definition, example = :example"
             if not is_sqlite
-            else "INSERT OR REPLACE INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level)"
+            else "INSERT OR REPLACE INTO words (id, ua, en, level, definition, example) "
+            "VALUES (:id, :ua, :en, :level, :definition, :example)"
         )
     else:
         word_sql = (
-            "INSERT OR IGNORE INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level)"
+            "INSERT OR IGNORE INTO words (id, ua, en, level, definition, example) "
+            "VALUES (:id, :ua, :en, :level, :definition, :example)"
             if is_sqlite
-            else "INSERT INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level) ON CONFLICT (id) DO NOTHING"
+            else "INSERT INTO words (id, ua, en, level, definition, example) "
+            "VALUES (:id, :ua, :en, :level, :definition, :example) ON CONFLICT (id) DO NOTHING"
         )
 
-    dict_sql = (
-        "INSERT OR IGNORE INTO dictionary_entries (ua_word, en_word, part_of_speech, source, created_at) "
-        "VALUES (:ua_word, :en_word, :part_of_speech, :source, :created_at)"
-        if is_sqlite
-        else "INSERT INTO dictionary_entries (ua_word, en_word, part_of_speech, source, created_at) "
-        "VALUES (:ua_word, :en_word, :part_of_speech, :source, :created_at) ON CONFLICT (ua_word, en_word) DO NOTHING"
-    )
+    if is_oxford:
+        dict_sql = (
+            "INSERT INTO dictionary_entries (ua_word, en_word, part_of_speech, source, definition, example, created_at) "
+            "VALUES (:ua_word, :en_word, :part_of_speech, :source, :definition, :example, :created_at) "
+            "ON CONFLICT (ua_word, en_word) DO UPDATE SET "
+            "definition = :definition, example = :example, source = :source"
+            if not is_sqlite
+            else "INSERT OR REPLACE INTO dictionary_entries "
+            "(ua_word, en_word, part_of_speech, source, definition, example, created_at) "
+            "VALUES (:ua_word, :en_word, :part_of_speech, :source, :definition, :example, :created_at)"
+        )
+    else:
+        dict_sql = (
+            "INSERT OR IGNORE INTO dictionary_entries "
+            "(ua_word, en_word, part_of_speech, source, definition, example, created_at) "
+            "VALUES (:ua_word, :en_word, :part_of_speech, :source, :definition, :example, :created_at)"
+            if is_sqlite
+            else "INSERT INTO dictionary_entries "
+            "(ua_word, en_word, part_of_speech, source, definition, example, created_at) "
+            "VALUES (:ua_word, :en_word, :part_of_speech, :source, :definition, :example, :created_at) "
+            "ON CONFLICT (ua_word, en_word) DO NOTHING"
+        )
 
     inserted_words = 0
     inserted_dict = 0
@@ -285,10 +308,12 @@ def seed_from_csv(force: bool = False) -> int:
             en_col = _find_col(["en_word", "en", "english", "word_en", "word"])
             pos_col = _find_col(["part_of_speech", "pos", "type", "word_type"])
             level_col = _find_col(["level", "cefr", "cefr_level", "difficulty"])
-            source_col = _find_col(["source"])
+            source_col = _find_col(["source", "def_source"])
+            def_col = _find_col(["definition", "def"])
+            example_col = _find_col(["example", "sentence"])
 
-            logger.info("Mapped columns — ua:%s en:%s pos:%s level:%s source:%s",
-                        ua_col, en_col, pos_col, level_col, source_col)
+            logger.info("Mapped columns — ua:%s en:%s pos:%s level:%s source:%s def:%s example:%s",
+                        ua_col, en_col, pos_col, level_col, source_col, def_col, example_col)
 
             if not ua_col or not en_col:
                 logger.error("Cannot find ua/en columns in CSV. Headers: %s", headers)
@@ -302,6 +327,8 @@ def seed_from_csv(force: bool = False) -> int:
                     pos = _expand_pos(pos_raw)
                     level = (row.get(level_col) or "B1").strip().upper() if level_col else "B1"
                     source = (row.get(source_col) or ("oxford" if is_oxford else "csv")).strip() if source_col else ("oxford" if is_oxford else "csv")
+                    definition = (row.get(def_col) or "").strip() if def_col else ""
+                    example = (row.get(example_col) or "").strip() if example_col else ""
 
                     if not ua or not en:
                         continue
@@ -317,6 +344,8 @@ def seed_from_csv(force: bool = False) -> int:
                         "en_word": en.lower(),
                         "part_of_speech": pos or None,
                         "source": source.lower(),
+                        "definition": definition,
+                        "example": example,
                         "created_at": _utc_now(),
                     })
 
@@ -329,6 +358,8 @@ def seed_from_csv(force: bool = False) -> int:
                             "ua": ua,
                             "en": en,
                             "level": level,
+                            "definition": definition,
+                            "example": example,
                         })
 
                     rows_processed += 1
@@ -380,6 +411,8 @@ def seed_from_csv(force: bool = False) -> int:
                         "en_word": en.lower(),
                         "part_of_speech": pos or None,
                         "source": source.lower(),
+                        "definition": "",
+                        "example": "",
                         "created_at": _utc_now(),
                     })
 
@@ -391,6 +424,8 @@ def seed_from_csv(force: bool = False) -> int:
                             "ua": ua,
                             "en": en,
                             "level": level,
+                            "definition": "",
+                            "example": "",
                         })
 
                     rows_processed += 1
@@ -464,9 +499,11 @@ def seed_sample_words_if_empty() -> int:
             return 0
 
         session.execute(
-            text("INSERT INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level)"),
+            text("INSERT INTO words (id, ua, en, level, definition, example) "
+                 "VALUES (:id, :ua, :en, :level, :definition, :example)"),
             [
-                {"id": f"seed-{idx:03d}", "ua": ua, "en": en, "level": level}
+                {"id": f"seed-{idx:03d}", "ua": ua, "en": en, "level": level,
+                 "definition": "", "example": ""}
                 for idx, (ua, en, level) in enumerate(sample_words, start=1)
             ],
         )

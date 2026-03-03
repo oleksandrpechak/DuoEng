@@ -409,7 +409,8 @@ async def dictionary_search(
         rows = session.execute(
             text(
                 f"""
-                SELECT d.ua_word, d.en_word, d.part_of_speech, d.source {level_select}
+                SELECT d.ua_word, d.en_word, d.part_of_speech, d.source,
+                       d.definition, d.example {level_select}
                 FROM dictionary_entries d
                 {level_join}
                 WHERE (d.en_word LIKE :prefix OR d.ua_word LIKE :prefix) {level_clause}
