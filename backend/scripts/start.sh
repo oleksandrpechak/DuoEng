@@ -90,7 +90,14 @@ if [ "${SKIP_ALEMBIC_BOOTSTRAP:-0}" != "1" ] && [ -n "${DATABASE_URL:-}" ]; then
   fi
 fi
 
+# Clear stale bytecode to ensure fresh migration files are used
+find . -path '*/alembic/versions/__pycache__' -exec rm -rf {} + 2>/dev/null || true
+
 echo "[startup] running database migrations..."
+echo "[startup] alembic current revision:"
+alembic current 2>&1 || true
+echo "[startup] alembic heads:"
+alembic heads 2>&1 || true
 alembic upgrade head
 
 echo "[startup] starting API server..."
