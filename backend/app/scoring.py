@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
 import hashlib
 import logging
 import re
@@ -132,11 +133,14 @@ class LLMScorer:
     # Dictionary-first lookup (fast, ~5ms)
     # ------------------------------------------------------------------
 
-    def dictionary_check(self, ua_word: str, player_answer: str) -> Optional[bool]:
+    def dictionary_check(self, ua_word: str, player_answer: str) -> Optional[str]:
         """Check dictionary_entries table for a match.
 
-        Returns True if answer matches, False if word exists but answer doesn't match,
-        None if word not found in dictionary at all (use AI fallback).
+        Returns:
+          "exact"   — exact translation found
+          "similar" — word exists and answer is close (contains / token overlap)
+          "wrong"   — word exists but answer doesn't match any translation
+          None      — word not found in dictionary at all (use AI fallback)
         """
         normalized_answer = player_answer.strip().lower()
         normalized_ua = ua_word.strip().lower()
@@ -156,7 +160,7 @@ class LLMScorer:
             ).mappings().first()
 
             if row:
-                return True  # Exact match found
+                return "exact"  # Exact match found
 
             # Get all English translations for this Ukrainian word
             rows = session.execute(
@@ -174,17 +178,41 @@ class LLMScorer:
                     en = r["en_word"].lower().strip()
                     # Contains match (e.g. "dog" in "hot dog", or answer "automobile" contains "auto")
                     if normalized_answer in en or en in normalized_answer:
-                        return True
+                        return "similar"
                     # Token overlap for multi-word translations
                     en_tokens = set(en.split())
                     answer_tokens = set(normalized_answer.split())
                     if en_tokens and answer_tokens:
                         overlap = len(en_tokens & answer_tokens)
                         if overlap >= min(len(en_tokens), len(answer_tokens)):
-                            return True
-                return False  # Word found in dictionary but answer doesn't match any translation
+                            return "similar"
+                return "wrong"  # Word found in dictionary but answer doesn't match any translation
 
             return None  # Word not in dictionary — use AI fallback
+
+    def similarity_check(self, ua_word: str, player_answer: str) -> bool:
+        """Returns True if answer is 80%+ similar to any known translation."""
+        normalized = player_answer.strip().lower()
+        normalized_ua = ua_word.strip().lower()
+
+        if not normalized or not normalized_ua:
+            return False
+
+        with get_db() as session:
+            rows = session.execute(
+                text(
+                    "SELECT en_word FROM dictionary_entries "
+                    "WHERE LOWER(ua_word) = :ua "
+                    "LIMIT 20"
+                ),
+                {"ua": normalized_ua},
+            ).scalars().all()
+
+        for en_word in rows:
+            ratio = SequenceMatcher(None, normalized, en_word.lower().strip()).ratio()
+            if ratio >= 0.80:
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Translation mode helpers (legacy, kept for backward compat)
@@ -286,7 +314,15 @@ class LLMScorer:
 
         answer = raw.strip().upper()
         if answer.startswith("YES"):
+            logger.info(
+                "AI description check: accepted",
+                extra={"event": "ai_description_check", "ua_word": ua_word, "answer": description, "result": True},
+            )
             return ScoreResult(score=1, source="llm", used_llm=True)
+        logger.info(
+            "AI description check: rejected",
+            extra={"event": "ai_description_check", "ua_word": ua_word, "answer": description, "result": False},
+        )
         return ScoreResult(score=0, source="llm", used_llm=True)
 
     async def score_description(self, word: str, description: str, ua_word: str = "") -> ScoreResult:
@@ -295,9 +331,14 @@ class LLMScorer:
         Pipeline:
           1. Check LLM cache (instant if cached)
           2. Check dictionary (fast DB lookup, ~5ms)
+             - exact match → +2 pts
+             - similar (contains/overlap) → +1 pt
+             - no match → 0 pts
           3. AI fallback only if word not in dictionary (slower, ~2-4s)
+             - AI says YES → +1 pt (description accepted)
+             - AI says NO → 0 pts
 
-        Returns ScoreResult with score 1 (correct) or 0 (wrong).
+        Returns ScoreResult with score 2, 1, or 0.
         """
         key = self._cache_key(f"{ua_word}:{word}" if ua_word else word, description)
         cached = self._load_cached(key)
@@ -307,15 +348,30 @@ class LLMScorer:
         # STEP 2: Dictionary lookup (fast)
         if ua_word:
             dict_result = self.dictionary_check(ua_word, description)
-            if dict_result is True:
-                result = ScoreResult(score=1, source="dictionary", used_llm=False)
+            if dict_result == "exact":
+                result = ScoreResult(score=2, source="dictionary_exact", used_llm=False)
                 self._store_cached(key, result)
                 return result
-            elif dict_result is False:
+            elif dict_result == "similar":
+                result = ScoreResult(score=1, source="dictionary_similar", used_llm=False)
+                self._store_cached(key, result)
+                return result
+            elif dict_result == "wrong":
+                # Dictionary says wrong, but check similarity before giving 0
+                if self.similarity_check(ua_word, description):
+                    result = ScoreResult(score=1, source="similarity", used_llm=False)
+                    self._store_cached(key, result)
+                    return result
                 result = ScoreResult(score=0, source="dictionary", used_llm=False)
                 self._store_cached(key, result)
                 return result
             # dict_result is None → word not in dictionary, fall through to AI
+
+        # STEP 2b: Similarity check (difflib, fast, no AI)
+        if ua_word and self.similarity_check(ua_word, description):
+            result = ScoreResult(score=1, source="similarity", used_llm=False)
+            self._store_cached(key, result)
+            return result
 
         # STEP 3: AI fallback
         try:

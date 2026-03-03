@@ -46,7 +46,7 @@ class Room(Base):
     __tablename__ = "rooms"
     __table_args__ = (
         CheckConstraint("status IN ('waiting', 'playing', 'finished')", name="ck_rooms_status"),
-        CheckConstraint("mode IN ('classic', 'challenge')", name="ck_rooms_mode"),
+        CheckConstraint("mode IN ('classic', 'challenge', 'vs_ai')", name="ck_rooms_mode"),
         CheckConstraint(
             "word_level IN ('A1', 'A2', 'B1', 'B2', 'C1', 'C2')",
             name="ck_rooms_word_level",
@@ -65,6 +65,11 @@ class Room(Base):
     current_word_en: Mapped[str | None] = mapped_column(Text, nullable=True)
     match_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     word_level: Mapped[str] = mapped_column(String(2), nullable=False, default="B1")
+    # Second-chance fields (Feature 7)
+    second_chance_player: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    second_chance_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # AI game fields (Feature 8)
+    ai_difficulty: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 class RoomPlayer(Base):
@@ -182,4 +187,45 @@ class DictionaryEntry(Base):
     en_word: Mapped[str] = mapped_column(Text, nullable=False)
     part_of_speech: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class FavouriteWord(Base):
+    __tablename__ = "favourite_words"
+    __table_args__ = (
+        UniqueConstraint("player_id", "word_id", name="uq_favourite_words_player_word"),
+        Index("ix_favourite_words_player_id", "player_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("players.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    word_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("words.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CustomWord(Base):
+    __tablename__ = "custom_words"
+    __table_args__ = (
+        UniqueConstraint("player_id", "ua_word", "en_word", name="uq_custom_words_player_ua_en"),
+        Index("ix_custom_words_player_id", "player_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    player_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("players.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ua_word: Mapped[str] = mapped_column(Text, nullable=False)
+    en_word: Mapped[str] = mapped_column(Text, nullable=False)
+    level: Mapped[str] = mapped_column(String(2), nullable=False, default="B1")
+    approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
 import secrets
@@ -46,6 +47,16 @@ class GameService:
         self.ws_message_limiter = SlidingWindowLimiter()
         self.join_fail_tracker = ViolationTracker()
         self.violation_tracker = ViolationTracker()
+        # Room code → player_id mapping for "use favourites" mode
+        self._favourite_rooms: dict[str, str] = {}
+        # Room code → player_id mapping for "use custom words" mode
+        self._custom_word_rooms: dict[str, str] = {}
+        # Room code → list of specific word_ids for "practice wrong words" mode
+        self._word_id_rooms: dict[str, list[str]] = {}
+        # Room code → AI difficulty for AI rooms
+        self._ai_rooms: dict[str, str] = {}
+        # Active second-chance tasks (room_code → asyncio.Task)
+        self._second_chance_tasks: dict[str, asyncio.Task] = {}
 
     # ---------- SQL helpers ----------
     def _one(
@@ -244,7 +255,49 @@ class GameService:
             {"room_code": room_code.upper()},
         )
 
-    def _pick_random_word(self, session: Session, word_level: str = "B1") -> Mapping[str, Any]:
+    def _pick_random_word(self, session: Session, word_level: str = "B1", favourite_player_id: str | None = None, custom_word_player_id: str | None = None, word_ids: list[str] | None = None) -> Mapping[str, Any]:
+        # If specific word_ids provided (practice wrong words mode)
+        if word_ids:
+            row = self._one(
+                session,
+                """
+                SELECT ua, en FROM words WHERE id IN ({})
+                ORDER BY RANDOM() LIMIT 1
+                """.format(",".join(f"'{wid}'" for wid in word_ids[:200])),
+            )
+            if row:
+                return row
+
+        # If custom_word_player_id is set, try to pick from their custom words first
+        if custom_word_player_id:
+            row = self._one(
+                session,
+                """
+                SELECT ua_word AS ua, en_word AS en FROM custom_words
+                WHERE player_id = :player_id AND approved = 1
+                ORDER BY RANDOM() LIMIT 1
+                """,
+                {"player_id": custom_word_player_id},
+            )
+            if row:
+                return row
+
+        # If favourite_player_id is set, try to pick from their favourites first
+        if favourite_player_id:
+            row = self._one(
+                session,
+                """
+                SELECT w.ua, w.en FROM favourite_words fw
+                JOIN words w ON w.id = fw.word_id
+                WHERE fw.player_id = :player_id
+                ORDER BY RANDOM() LIMIT 1
+                """,
+                {"player_id": favourite_player_id},
+            )
+            if row:
+                return row
+            # If no favourites, fall through to normal selection
+
         row = self._one(
             session,
             "SELECT ua, en FROM words WHERE level = :level ORDER BY RANDOM() LIMIT 1",
@@ -362,7 +415,17 @@ class GameService:
             return
 
         word_level = room.get("word_level") or "B1"
-        word = self._pick_random_word(session, word_level=word_level)
+        room_code = str(room["code"])
+        fav_player = self._favourite_rooms.get(room_code)
+        custom_player = self._custom_word_rooms.get(room_code)
+        word_ids = self._word_id_rooms.get(room_code)
+        word = self._pick_random_word(
+            session,
+            word_level=word_level,
+            favourite_player_id=fav_player,
+            custom_word_player_id=custom_player,
+            word_ids=word_ids,
+        )
         next_turn_number = int(room["turn_number"]) + 1
         session.execute(
             text(
@@ -484,7 +547,7 @@ class GameService:
             )
 
     # ---------- Public game operations ----------
-    def create_room(self, player_id: str, mode: str, target_score: int, ip: str, word_level: str = "B1") -> dict[str, Any]:
+    def create_room(self, player_id: str, mode: str, target_score: int, ip: str, word_level: str = "B1", use_favourites: bool = False, use_custom_words: bool = False, ai_difficulty: str | None = None, word_ids: list[str] | None = None) -> dict[str, Any]:
         with get_db() as session:
             self._ensure_not_banned(session, player_id, ip)
 
@@ -496,6 +559,11 @@ class GameService:
             if not player:
                 raise HTTPException(status_code=404, detail="Player not found")
 
+            # For vs_ai mode, determine the AI player
+            actual_mode = mode
+            if mode == "vs_ai" and not ai_difficulty:
+                ai_difficulty = "medium"
+
             code = None
             for _ in range(settings.room_code_attempts):
                 candidate = generate_room_code(settings.room_code_length)
@@ -505,19 +573,20 @@ class GameService:
                             """
                             INSERT INTO rooms (
                                 code, created_at, status, current_turn, turn_started_at,
-                                mode, target_score, turn_number, word_level
+                                mode, target_score, turn_number, word_level, ai_difficulty
                             ) VALUES (
                                 :code, :created_at, 'waiting', NULL, NULL,
-                                :mode, :target_score, 0, :word_level
+                                :mode, :target_score, 0, :word_level, :ai_difficulty
                             )
                             """
                         ),
                         {
                             "code": candidate,
                             "created_at": _utc_now(),
-                            "mode": mode,
+                            "mode": actual_mode,
                             "target_score": target_score,
                             "word_level": word_level,
+                            "ai_difficulty": ai_difficulty if mode == "vs_ai" else None,
                         },
                     )
                     code = candidate
@@ -539,12 +608,98 @@ class GameService:
                 {"room_code": code, "player_id": player_id, "joined_at": _utc_now()},
             )
 
+            # For vs_ai: auto-join the AI player and start the game immediately
+            if mode == "vs_ai" and ai_difficulty:
+                from .ai_player import AI_PLAYER_IDS
+                ai_player_id = AI_PLAYER_IDS.get(ai_difficulty, AI_PLAYER_IDS["medium"])
+
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO room_players (room_code, player_id, player_order, score, joined_at)
+                        VALUES (:room_code, :player_id, 2, 0, :joined_at)
+                        """
+                    ),
+                    {"room_code": code, "player_id": ai_player_id, "joined_at": _utc_now()},
+                )
+
+                # Start the match immediately
+                match_id = str(uuid.uuid4())
+                fav_player = None
+                custom_player = None
+                wids = word_ids
+                if use_favourites:
+                    fav_player = player_id
+                if use_custom_words:
+                    custom_player = player_id
+                word = self._pick_random_word(
+                    session,
+                    word_level=word_level,
+                    favourite_player_id=fav_player,
+                    custom_word_player_id=custom_player,
+                    word_ids=wids,
+                )
+
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO matches (id, room_code, player_a, player_b, started_at)
+                        VALUES (:id, :room_code, :player_a, :player_b, :started_at)
+                        """
+                    ),
+                    {
+                        "id": match_id,
+                        "room_code": code,
+                        "player_a": player_id,
+                        "player_b": ai_player_id,
+                        "started_at": _utc_now(),
+                    },
+                )
+
+                session.execute(
+                    text(
+                        """
+                        UPDATE rooms
+                        SET status = 'playing',
+                            current_turn = :current_turn,
+                            turn_started_at = :turn_started_at,
+                            turn_number = 1,
+                            current_word_ua = :current_word_ua,
+                            current_word_en = :current_word_en,
+                            match_id = :match_id
+                        WHERE code = :code
+                        """
+                    ),
+                    {
+                        "current_turn": player_id,
+                        "turn_started_at": _utc_now(),
+                        "current_word_ua": word["ua"],
+                        "current_word_en": word["en"],
+                        "match_id": match_id,
+                        "code": code,
+                    },
+                )
+
+                self._ai_rooms[code] = ai_difficulty
+
+        # Track favourite rooms
+        if use_favourites:
+            self._favourite_rooms[code] = player_id
+        if use_custom_words:
+            self._custom_word_rooms[code] = player_id
+        if word_ids:
+            self._word_id_rooms[code] = word_ids
+        if mode == "vs_ai" and ai_difficulty:
+            self._ai_rooms[code] = ai_difficulty
+
         return {
             "room_code": code,
             "code": code,
-            "status": "waiting",
-            "room_link": f"{settings.frontend_url}/join/{code}",
+            "status": "playing" if mode == "vs_ai" else "waiting",
+            "room_link": f"{settings.frontend_url}/join/{code}" if mode != "vs_ai" else None,
             "word_level": word_level,
+            "mode": actual_mode,
+            "ai_difficulty": ai_difficulty,
         }
 
     def join_room(self, room_code: str, player_id: str, ip: str) -> dict[str, Any]:
@@ -598,7 +753,16 @@ class GameService:
                 players = self._fetch_room_players(session, normalized_code)
                 match_id = str(uuid.uuid4())
                 word_level = room.get("word_level") or "B1"
-                word = self._pick_random_word(session, word_level=word_level)
+                fav_player = self._favourite_rooms.get(normalized_code)
+                custom_player = self._custom_word_rooms.get(normalized_code)
+                word_ids_list = self._word_id_rooms.get(normalized_code)
+                word = self._pick_random_word(
+                    session,
+                    word_level=word_level,
+                    favourite_player_id=fav_player,
+                    custom_word_player_id=custom_player,
+                    word_ids=word_ids_list,
+                )
                 turn_player_id = players[0]["player_id"]
 
                 session.execute(
@@ -807,23 +971,74 @@ class GameService:
 
             game_over = updated_score >= int(room["target_score"])
             winner_id: Optional[str] = None
+            second_chance = False
+            second_chance_player_id: Optional[str] = None
 
             if game_over:
                 winner_id = player_id
                 self._finish_match(session, room, winner_id)
+            elif scoring.score == 0:
+                # FEATURE 7: Second chance — opponent gets 10s to steal
+                other_id = self._other_player_id(session, normalized_code, player_id)
+                from .ai_player import is_ai_player
+                if other_id and not is_ai_player(other_id):
+                    second_chance = True
+                    second_chance_player_id = other_id
+                    # Set second_chance fields on room
+                    expires_at = _utc_now() + timedelta(seconds=10)
+                    session.execute(
+                        text(
+                            """
+                            UPDATE rooms
+                            SET second_chance_player = :sc_player,
+                                second_chance_expires = :sc_expires
+                            WHERE code = :code
+                            """
+                        ),
+                        {
+                            "sc_player": other_id,
+                            "sc_expires": expires_at,
+                            "code": normalized_code,
+                        },
+                    )
+                    # Don't advance turn yet — wait for second chance
+                else:
+                    self._advance_turn(session, room, player_id)
             else:
+                # Clear any second chance state
+                session.execute(
+                    text(
+                        """
+                        UPDATE rooms
+                        SET second_chance_player = NULL,
+                            second_chance_expires = NULL
+                        WHERE code = :code
+                        """
+                    ),
+                    {"code": normalized_code},
+                )
                 self._advance_turn(session, room, player_id)
 
-            return {
+            result = {
                 "room_code": normalized_code,
                 "turn_number": int(room["turn_number"]),
                 "points": scoring.score,
                 "scoring_source": scoring.source,
-                "feedback": "correct" if scoring.score >= 1 else "wrong",
+                "feedback": "exact" if scoring.score >= 2 else "correct" if scoring.score >= 1 else "wrong",
                 "correct_answer": turn_snapshot["correct_answer"],
                 "game_over": game_over,
                 "winner_id": winner_id,
+                "second_chance": second_chance,
+                "second_chance_player_id": second_chance_player_id,
             }
+
+        # After releasing the DB session, trigger AI auto-move if it's now AI's turn
+        if not game_over and not second_chance:
+            ai_diff = self._ai_rooms.get(normalized_code)
+            if ai_diff:
+                asyncio.ensure_future(self._trigger_ai_move(normalized_code, ai_diff))
+
+        return result
 
     def room_state_for_player(self, room_code: str, viewer_player_id: str, ip: str) -> dict[str, Any]:
         normalized_code = room_code.upper()
@@ -1191,3 +1406,415 @@ class GameService:
             )
 
             return {"detail": "Left the room", "room_code": normalized_code}
+
+    # ---------- Auth / Players ----------
+    def change_nickname(self, player_id: str, new_nickname: str) -> dict[str, Any]:
+        """Change player's nickname. Returns updated player info + new JWT."""
+        import re
+        candidate = new_nickname.strip()
+        if len(candidate) < 2:
+            raise HTTPException(status_code=422, detail="Nickname must be at least 2 characters")
+        if len(candidate) > 20:
+            raise HTTPException(status_code=422, detail="Nickname must be at most 20 characters")
+        if not re.match(r'^[a-zA-Z0-9_\- \u0400-\u04FF]+$', candidate):
+            raise HTTPException(
+                status_code=422,
+                detail="Nickname can only contain letters, digits, spaces, hyphens, and underscores",
+            )
+
+        with get_db() as session:
+            player = self._one(
+                session,
+                "SELECT id, nickname FROM players WHERE id = :player_id",
+                {"player_id": player_id},
+            )
+            if not player:
+                raise HTTPException(status_code=404, detail="Player not found")
+
+            if player["nickname"] == candidate:
+                is_admin = candidate.lower() in settings.admin_nicknames
+                token = create_access_token(player_id=player_id, nickname=candidate, is_admin=is_admin)
+                return {
+                    "player_id": player_id,
+                    "nickname": candidate,
+                    "access_token": token,
+                    "token_type": "bearer",
+                }
+
+            existing = self._one(
+                session,
+                "SELECT id FROM players WHERE nickname = :nickname AND id != :player_id",
+                {"nickname": candidate, "player_id": player_id},
+            )
+            if existing:
+                raise HTTPException(status_code=409, detail="Nickname already taken")
+
+            session.execute(
+                text(
+                    "UPDATE players SET nickname = :nickname WHERE id = :player_id"
+                ),
+                {"nickname": candidate, "player_id": player_id},
+            )
+
+        is_admin = candidate.lower() in settings.admin_nicknames
+        token = create_access_token(player_id=player_id, nickname=candidate, is_admin=is_admin)
+        logger.info(
+            "Nickname changed",
+            extra={"event": "nickname_changed", "player_id": player_id, "new_nickname": candidate},
+        )
+        return {
+            "player_id": player_id,
+            "nickname": candidate,
+            "access_token": token,
+            "token_type": "bearer",
+        }
+
+    # ---------- Favourite words ----------
+    def add_favourite(self, player_id: str, word_id: str) -> dict[str, Any]:
+        with get_db() as session:
+            word = self._one(
+                session,
+                "SELECT id, ua, en, level FROM words WHERE id = :word_id",
+                {"word_id": word_id},
+            )
+            if not word:
+                raise HTTPException(status_code=404, detail="Word not found")
+
+            existing = self._one(
+                session,
+                "SELECT id FROM favourite_words WHERE player_id = :player_id AND word_id = :word_id",
+                {"player_id": player_id, "word_id": word_id},
+            )
+            if existing:
+                raise HTTPException(status_code=409, detail="Word already in favourites")
+
+            now = _utc_now()
+            session.execute(
+                text(
+                    "INSERT INTO favourite_words (player_id, word_id, added_at) "
+                    "VALUES (:player_id, :word_id, :added_at)"
+                ),
+                {"player_id": player_id, "word_id": word_id, "added_at": now},
+            )
+
+        return {
+            "id": 0,  # auto-increment, not critical to return exact id
+            "word_id": word["id"],
+            "ua": word["ua"],
+            "en": word["en"],
+            "level": word["level"],
+            "added_at": now.isoformat(),
+        }
+
+    def remove_favourite(self, player_id: str, word_id: str) -> dict[str, Any]:
+        with get_db() as session:
+            existing = self._one(
+                session,
+                "SELECT id FROM favourite_words WHERE player_id = :player_id AND word_id = :word_id",
+                {"player_id": player_id, "word_id": word_id},
+            )
+            if not existing:
+                raise HTTPException(status_code=404, detail="Favourite not found")
+
+            session.execute(
+                text(
+                    "DELETE FROM favourite_words WHERE player_id = :player_id AND word_id = :word_id"
+                ),
+                {"player_id": player_id, "word_id": word_id},
+            )
+
+        return {"detail": "Removed from favourites", "word_id": word_id}
+
+    def list_favourites(self, player_id: str) -> list[dict[str, Any]]:
+        with get_db() as session:
+            rows = self._all(
+                session,
+                """
+                SELECT fw.id, fw.word_id, w.ua, w.en, w.level, fw.added_at
+                FROM favourite_words fw
+                JOIN words w ON w.id = fw.word_id
+                WHERE fw.player_id = :player_id
+                ORDER BY fw.added_at DESC
+                """,
+                {"player_id": player_id},
+            )
+
+        results = []
+        for row in rows:
+            added_at = row["added_at"]
+            if isinstance(added_at, datetime):
+                added_at = added_at.isoformat()
+            results.append({
+                "id": row["id"],
+                "word_id": row["word_id"],
+                "ua": row["ua"],
+                "en": row["en"],
+                "level": row["level"],
+                "added_at": added_at,
+            })
+        return results
+
+    # ---------- AI auto-move (Feature 8) ----------
+    async def _trigger_ai_move(self, room_code: str, difficulty: str) -> None:
+        """Auto-trigger an AI move after a small delay."""
+        from .ai_player import make_ai_move, is_ai_player
+
+        try:
+            with get_db() as session:
+                room = self._fetch_room(session, room_code)
+                if not room or room["status"] != "playing":
+                    return
+                current_turn = room["current_turn"]
+                if not current_turn or not is_ai_player(current_turn):
+                    return
+                ua_word = room["current_word_ua"] or ""
+                en_word = room["current_word_en"] or ""
+
+            ai_answer = await make_ai_move(ua_word, en_word, difficulty)
+
+            # Submit the AI's answer through the normal pipeline
+            await self.submit_answer(
+                room_code=room_code,
+                player_id=current_turn,
+                answer=ai_answer,
+                ip="ai",
+                channel="ai",
+            )
+        except Exception:
+            logger.exception("AI auto-move failed", extra={"event": "ai_move_failed", "room_code": room_code})
+
+    # ---------- Second chance submit (Feature 7) ----------
+    async def submit_second_chance(
+        self,
+        room_code: str,
+        player_id: str,
+        answer: str,
+        ip: str,
+    ) -> dict[str, Any]:
+        """Handle a second-chance answer from the opponent."""
+        normalized_code = room_code.upper()
+
+        with get_db() as session:
+            self._ensure_not_banned(session, player_id, ip)
+            room = self._fetch_room(session, normalized_code)
+            if not room:
+                raise HTTPException(status_code=404, detail="Room not found")
+            if room["status"] != "playing":
+                raise HTTPException(status_code=400, detail="Match is not active")
+            if room.get("second_chance_player") != player_id:
+                raise HTTPException(status_code=403, detail="Not your second chance")
+
+            # Check if expired
+            sc_expires = _parse_dt(room.get("second_chance_expires"))
+            if not sc_expires or _utc_now() > sc_expires:
+                # Expired — clear second chance and advance turn
+                session.execute(
+                    text(
+                        """
+                        UPDATE rooms
+                        SET second_chance_player = NULL,
+                            second_chance_expires = NULL
+                        WHERE code = :code
+                        """
+                    ),
+                    {"code": normalized_code},
+                )
+                self._advance_turn(session, room, str(room["current_turn"]))
+                raise HTTPException(status_code=409, detail="Second chance expired")
+
+            correct_answer = room["current_word_en"] or ""
+            ua_word = room["current_word_ua"] or ""
+
+        # Score the answer
+        scoring = await self.scorer.score_description(correct_answer, answer, ua_word=ua_word)
+
+        with get_db() as session:
+            room = self._fetch_room(session, normalized_code)
+            if not room or room["status"] != "playing":
+                raise HTTPException(status_code=400, detail="Match is not active")
+
+            if scoring.score > 0:
+                session.execute(
+                    text(
+                        """
+                        UPDATE room_players
+                        SET score = score + :points
+                        WHERE room_code = :room_code AND player_id = :player_id
+                        """
+                    ),
+                    {"points": scoring.score, "room_code": normalized_code, "player_id": player_id},
+                )
+
+            # Clear second chance and advance turn
+            session.execute(
+                text(
+                    """
+                    UPDATE rooms
+                    SET second_chance_player = NULL,
+                        second_chance_expires = NULL
+                    WHERE code = :code
+                    """
+                ),
+                {"code": normalized_code},
+            )
+            self._advance_turn(session, room, str(room["current_turn"]))
+
+            updated_score = int(
+                self._scalar(
+                    session,
+                    "SELECT score FROM room_players WHERE room_code = :rc AND player_id = :pid",
+                    {"rc": normalized_code, "pid": player_id},
+                )
+            )
+            game_over = updated_score >= int(room["target_score"])
+            winner_id = None
+            if game_over:
+                winner_id = player_id
+                self._finish_match(session, room, winner_id)
+
+        return {
+            "room_code": normalized_code,
+            "points": scoring.score,
+            "scoring_source": scoring.source,
+            "feedback": "exact" if scoring.score >= 2 else "correct" if scoring.score >= 1 else "wrong",
+            "correct_answer": correct_answer,
+            "game_over": game_over,
+            "winner_id": winner_id,
+        }
+
+    # ---------- Custom words (Feature 9) ----------
+    def add_custom_word(self, player_id: str, ua_word: str, en_word: str) -> dict[str, Any]:
+        import re
+        ua = ua_word.strip()
+        en = en_word.strip()
+
+        # Validate single words only (allow hyphens)
+        if " " in ua and not ua.startswith("не "):
+            raise HTTPException(status_code=422, detail="Ukrainian word must be a single word")
+        if " " in en:
+            raise HTTPException(status_code=422, detail="English word must be a single word")
+        if not re.match(r'^[\w\-\u0400-\u04FF]+$', ua):
+            raise HTTPException(status_code=422, detail="Invalid Ukrainian word")
+        if not re.match(r'^[a-zA-Z\-]+$', en):
+            raise HTTPException(status_code=422, detail="Invalid English word")
+
+        word_id = str(uuid.uuid4())
+        now = _utc_now()
+
+        with get_db() as session:
+            existing = self._one(
+                session,
+                """
+                SELECT id FROM custom_words
+                WHERE player_id = :pid AND LOWER(ua_word) = :ua AND LOWER(en_word) = :en
+                """,
+                {"pid": player_id, "ua": ua.lower(), "en": en.lower()},
+            )
+            if existing:
+                raise HTTPException(status_code=409, detail="Word pair already exists")
+
+            session.execute(
+                text(
+                    """
+                    INSERT INTO custom_words (id, player_id, ua_word, en_word, level, approved, created_at)
+                    VALUES (:id, :player_id, :ua_word, :en_word, :level, :approved, :created_at)
+                    """
+                ),
+                {
+                    "id": word_id,
+                    "player_id": player_id,
+                    "ua_word": ua,
+                    "en_word": en,
+                    "level": "B1",  # Default, will be re-evaluated by AI
+                    "approved": True,
+                    "created_at": now,
+                },
+            )
+
+        return {
+            "id": word_id,
+            "ua_word": ua,
+            "en_word": en,
+            "level": "B1",
+            "approved": True,
+            "created_at": now.isoformat(),
+        }
+
+    def list_custom_words(self, player_id: str) -> list[dict[str, Any]]:
+        with get_db() as session:
+            rows = self._all(
+                session,
+                """
+                SELECT id, ua_word, en_word, level, approved, created_at
+                FROM custom_words
+                WHERE player_id = :pid
+                ORDER BY created_at DESC
+                """,
+                {"pid": player_id},
+            )
+        results = []
+        for row in rows:
+            created_at = row["created_at"]
+            if isinstance(created_at, datetime):
+                created_at = created_at.isoformat()
+            results.append({
+                "id": row["id"],
+                "ua_word": row["ua_word"],
+                "en_word": row["en_word"],
+                "level": row["level"],
+                "approved": bool(row["approved"]),
+                "created_at": created_at,
+            })
+        return results
+
+    def delete_custom_word(self, player_id: str, word_id: str) -> dict[str, Any]:
+        with get_db() as session:
+            existing = self._one(
+                session,
+                "SELECT id FROM custom_words WHERE id = :wid AND player_id = :pid",
+                {"wid": word_id, "pid": player_id},
+            )
+            if not existing:
+                raise HTTPException(status_code=404, detail="Custom word not found")
+            session.execute(
+                text("DELETE FROM custom_words WHERE id = :wid AND player_id = :pid"),
+                {"wid": word_id, "pid": player_id},
+            )
+        return {"detail": "Deleted", "word_id": word_id}
+
+    # ---------- Wrong words (Feature 10) ----------
+    def get_wrong_words(self, player_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        with get_db() as session:
+            rows = self._all(
+                session,
+                """
+                SELECT
+                    m.ua_word,
+                    m.correct_answer,
+                    m.user_answer,
+                    MAX(m.created_at) AS created_at,
+                    COUNT(*) AS times_wrong
+                FROM moves m
+                WHERE m.player_id = :player_id
+                  AND m.score_awarded = 0
+                  AND m.is_timeout = 0
+                GROUP BY m.ua_word, m.correct_answer
+                ORDER BY times_wrong DESC, MAX(m.created_at) DESC
+                LIMIT :lim
+                """,
+                {"player_id": player_id, "lim": limit},
+            )
+
+        results = []
+        for row in rows:
+            created_at = row["created_at"]
+            if isinstance(created_at, datetime):
+                created_at = created_at.isoformat()
+            results.append({
+                "ua_word": row["ua_word"],
+                "correct_answer": row["correct_answer"],
+                "user_answer": row["user_answer"],
+                "times_wrong": row["times_wrong"],
+                "created_at": created_at,
+            })
+        return results

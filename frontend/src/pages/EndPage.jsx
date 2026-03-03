@@ -72,7 +72,7 @@ export default function EndPage() {
       </div>
 
       {/* Final Scores */}
-      <Card className="w-full max-w-md rounded-3xl shadow-soft border-0 mb-6" data-testid="final-scores">
+      <Card className="w-full max-w-md lg:max-w-lg rounded-3xl shadow-soft border-0 mb-6" data-testid="final-scores">
         <CardHeader className="text-center pb-2">
           <CardTitle className="font-heading text-xl">Final Scores</CardTitle>
           <CardDescription>Target was {gameState.target_score} points</CardDescription>
@@ -132,7 +132,7 @@ export default function EndPage() {
       </Card>
 
       {/* Actions */}
-      <div className="w-full max-w-md space-y-3">
+      <div className="w-full max-w-md lg:max-w-lg space-y-3">
         <Button
           data-testid="play-again-btn"
           className="w-full rounded-full h-12 text-base font-bold bg-primary hover:bg-primary/90"

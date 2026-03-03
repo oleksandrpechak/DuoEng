@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import { Clock, Trophy, CheckCircle2, XCircle, AlertCircle, Send, Loader2, Pause, Play, LogOut } from "lucide-react";
+import { Clock, Trophy, CheckCircle2, XCircle, AlertCircle, Send, Loader2, Pause, Play, LogOut, Zap } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,6 +29,9 @@ export default function GamePage() {
   const [isPaused, setIsPaused] = useState(false);
   const [pausedBy, setPausedBy] = useState(null);
   const [scoringSourceMsg, setScoringSourceMsg] = useState(null);
+  const [secondChance, setSecondChance] = useState(null); // { word_ua, word_en, expires_in }
+  const [secondChanceAnswer, setSecondChanceAnswer] = useState("");
+  const [isSecondChanceSubmitting, setIsSecondChanceSubmitting] = useState(false);
   const inputRef = useRef(null);
   const wsRef = useRef(null);
 
@@ -100,6 +103,21 @@ export default function GamePage() {
           setGameState(msg.data);
           if (msg.data?.last_feedback) setLastFeedback(msg.data.last_feedback);
           if (msg.data?.status === "finished") navigate(`/end/${code}`);
+        } else if (msg.type === "second_chance") {
+          // Opponent answered wrong – you get a 10s steal opportunity
+          setSecondChance({
+            word_ua: msg.word_ua,
+            word_en: msg.word_en,
+            expires_in: msg.expires_in || 10,
+          });
+          setSecondChanceAnswer("");
+          toast.info("⚡ Steal opportunity! Answer before time runs out!");
+        } else if (msg.type === "second_chance_expired") {
+          setSecondChance(null);
+          setSecondChanceAnswer("");
+        } else if (msg.type === "second_chance") {
+          setSecondChance(msg.data);
+          toast.info("You have a second chance to answer!");
         }
       } catch {
         // ignore parse errors
@@ -138,6 +156,29 @@ export default function GamePage() {
     }
   };
 
+  const handleSecondChanceSubmit = async (e) => {
+    e.preventDefault();
+    if (!secondChanceAnswer.trim() || isSecondChanceSubmitting) return;
+    setIsSecondChanceSubmitting(true);
+    try {
+      const response = await api.post(`/rooms/${code}/second-chance`, {
+        answer: secondChanceAnswer.trim(),
+      });
+      const { points, feedback } = response.data;
+      if (points > 0) {
+        toast.success(`⚡ Steal! +${points} point${points > 1 ? "s" : ""}`);
+      } else {
+        toast.error("Steal missed!");
+      }
+      setSecondChance(null);
+      setSecondChanceAnswer("");
+      await fetchGameState();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Failed to submit steal");
+    }
+    setIsSecondChanceSubmitting(false);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!answer.trim() || isSubmitting) return;
@@ -152,14 +193,20 @@ export default function GamePage() {
 
       // Show scoring source feedback for 2.5 seconds
       const source = (scoring_source || "").toLowerCase();
-      if (feedback === "correct" || points >= 1) {
+      if (feedback === "exact" || points >= 2) {
+        setScoringSourceMsg({
+          text: `🎯 +${points} · exact translation!`,
+          color: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+        });
+        toast.success(`Perfect translation! +${points} points`);
+      } else if (feedback === "correct" || points === 1) {
         const isDictionary = source.includes("dictionary");
         setScoringSourceMsg({
-          text: isDictionary ? `✓ +${points} · dictionary match` : `✓ +${points} · AI verified`,
+          text: isDictionary ? `✓ +${points} · similar match` : `✓ +${points} · AI accepted`,
           color: isDictionary ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
                               : "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
         });
-        toast.success(`Great description! +${points} point`);
+        toast.success(`Good description! +${points} point`);
       } else if (feedback === "expired") {
         setScoringSourceMsg(null);
         toast.error(`Time expired! The word was: ${correct_answer}`);
@@ -203,15 +250,17 @@ export default function GamePage() {
 
   return (
     <div className="min-h-screen bg-background flex flex-col p-4" data-testid="game-page">
-      <div className="max-w-md mx-auto w-full">
+      <div className="max-w-md lg:max-w-lg mx-auto w-full">
         {/* Mode & Level Badges */}
         <div className="flex justify-center gap-2 mb-4">
           <span className={`px-4 py-1 rounded-full text-sm font-medium ${
             gameState.mode === "challenge" 
-              ? "bg-secondary/20 text-secondary-foreground" 
+              ? "bg-secondary/20 text-secondary-foreground"
+              : gameState.mode === "vs_ai"
+              ? "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300"
               : "bg-primary/20 text-primary-foreground"
           }`}>
-            {gameState.mode === "challenge" ? "Challenge Mode" : "Classic Mode"}
+            {gameState.mode === "challenge" ? "Challenge Mode" : gameState.mode === "vs_ai" ? "vs AI" : "Classic Mode"}
           </span>
           <CefrBadge level={gameState.word_level || "B1"} className="text-sm px-4 py-1" />
         </div>
@@ -288,7 +337,7 @@ export default function GamePage() {
                   {gameState.current_turn.word_ua || gameState.current_turn.word_en}
                 </p>
                 <p className="text-xs text-muted-foreground mt-4">
-                  Type the English translation or describe this word • +1 pt if accepted
+                  Exact translation → +2 pts • Description / similar → +1 pt
                 </p>
               </>
             ) : (
@@ -345,6 +394,7 @@ export default function GamePage() {
         {lastFeedback && (
           <Card className={`rounded-2xl border-0 mb-4 ${
             lastFeedback.status === "expired" ? "bg-destructive/10" :
+            lastFeedback.points >= 2 ? "bg-emerald-100/50 dark:bg-emerald-900/20" :
             lastFeedback.points >= 1 ? "bg-accent/30" :
             "bg-destructive/10"
           }`} data-testid="feedback-card">
@@ -457,6 +507,50 @@ export default function GamePage() {
                 <Play className="w-5 h-5 mr-2" />
                 Resume Game
               </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SECOND CHANCE (Steal) Overlay */}
+      {secondChance && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center" data-testid="second-chance-overlay">
+          <div className="bg-card rounded-3xl p-8 shadow-lg max-w-sm mx-4 animate-fade-in-up">
+            <Zap className="w-16 h-16 mx-auto text-yellow-500 mb-4 animate-pulse" />
+            <h2 className="font-heading text-2xl font-bold text-foreground mb-1 text-center">⚡ Steal Opportunity!</h2>
+            <p className="text-sm text-muted-foreground mb-4 text-center">
+              Your opponent got it wrong. Can you translate this word?
+            </p>
+            <p className="font-heading text-4xl text-center mb-6">
+              🇺🇦 {secondChance.word_ua}
+            </p>
+            <form onSubmit={handleSecondChanceSubmit} className="mb-4">
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Your English answer..."
+                  value={secondChanceAnswer}
+                  onChange={(e) => setSecondChanceAnswer(e.target.value)}
+                  className="rounded-full h-14 px-6 text-lg flex-1"
+                  disabled={isSecondChanceSubmitting}
+                  autoComplete="off"
+                  autoFocus
+                />
+                <Button
+                  type="submit"
+                  className="rounded-full h-14 w-14 p-0 bg-yellow-500 hover:bg-yellow-600 text-white"
+                  disabled={isSecondChanceSubmitting || !secondChanceAnswer.trim()}
+                >
+                  {isSecondChanceSubmitting ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Send className="w-5 h-5" />
+                  )}
+                </Button>
+              </div>
+            </form>
+            <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Clock className="w-4 h-4" />
+              <span>~{secondChance.expires_in}s remaining</span>
             </div>
           </div>
         </div>

@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
 import ThemeToggle from "@/components/theme-toggle";
+import AppLayout from "@/components/AppLayout";
 import LandingPage from "@/pages/LandingPage";
 import LobbyPage from "@/pages/LobbyPage";
 import GamePage from "@/pages/GamePage";
@@ -10,6 +11,8 @@ import EndPage from "@/pages/EndPage";
 import JoinPage from "@/pages/JoinPage";
 import WordLevelsPage from "@/pages/WordLevelsPage";
 import ProfilePage from "@/pages/ProfilePage";
+import MyWordsPage from "@/pages/MyWordsPage";
+import WrongWordsPage from "@/pages/WrongWordsPage";
 
 function App() {
   return (
@@ -19,15 +22,19 @@ function App() {
           <div className="fixed right-4 top-4 z-50">
             <ThemeToggle />
           </div>
-          <Routes>
-            <Route path="/" element={<LandingPage />} />
-            <Route path="/me" element={<ProfilePage />} />
-            <Route path="/join/:roomCode" element={<JoinPage />} />
-            <Route path="/word-levels" element={<WordLevelsPage />} />
-            <Route path="/lobby/:code" element={<LobbyPage />} />
-            <Route path="/game/:code" element={<GamePage />} />
-            <Route path="/end/:code" element={<EndPage />} />
-          </Routes>
+          <AppLayout>
+            <Routes>
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/me" element={<ProfilePage />} />
+              <Route path="/my-words" element={<MyWordsPage />} />
+              <Route path="/wrong-words" element={<WrongWordsPage />} />
+              <Route path="/join/:roomCode" element={<JoinPage />} />
+              <Route path="/word-levels" element={<WordLevelsPage />} />
+              <Route path="/lobby/:code" element={<LobbyPage />} />
+              <Route path="/game/:code" element={<GamePage />} />
+              <Route path="/end/:code" element={<EndPage />} />
+            </Routes>
+          </AppLayout>
         </BrowserRouter>
         <Toaster position="top-center" richColors />
       </div>

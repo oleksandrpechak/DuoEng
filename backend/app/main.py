@@ -23,9 +23,16 @@ from .routers.ai import router as ai_router
 from .routers.oauth import router as oauth_router
 from .routers.word_levels import router as word_levels_router
 from .schemas import (
+    AddCustomWordRequest,
+    AddFavouriteRequest,
     AdminSeedRequest,
+    ChangeNicknameRequest,
+    ChangeNicknameResponse,
     CreateRoomRequest,
+    CustomWordItem,
     DictionaryEntryItem,
+    EvaluateLevelsRequest,
+    FavouriteWordItem,
     GuestAuthRequest,
     GuestAuthResponse,
     JoinRoomResponse,
@@ -34,6 +41,7 @@ from .schemas import (
     PlayerStatsResponse,
     RoomStateResponse,
     SubmitAnswerRequest,
+    WrongWordItem,
 )
 from .scoring import LLMScorer
 from .security import AuthContext, auth_context_from_header, decode_token
@@ -71,6 +79,13 @@ async def startup_event() -> None:
         # Local dev fallback keeps sqlite bootstrap simple.
         init_db()
 
+    # Create AI players on startup (Feature 8)
+    try:
+        from .ai_player import ensure_ai_players_exist
+        ensure_ai_players_exist()
+    except Exception:
+        logger.warning("Could not create AI players at startup")
+
     # Run seeding in a background thread so the server can bind the port
     # immediately.  Render (and similar PaaS) will kill the process if no
     # open port is detected within ~5 minutes.
@@ -102,7 +117,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -217,6 +232,10 @@ async def create_room(
         target_score=payload.target_score,
         ip=_client_ip_from_request(request),
         word_level=payload.word_level,
+        use_favourites=payload.use_favourites,
+        use_custom_words=payload.use_custom_words,
+        ai_difficulty=payload.ai_difficulty,
+        word_ids=payload.word_ids,
     )
     return JoinRoomResponse(**result)
 
@@ -316,6 +335,42 @@ async def player_stats(
     return PlayerStatsResponse(**stats)
 
 
+@api_router.patch("/players/me/nickname", response_model=ChangeNicknameResponse)
+async def change_nickname(
+    payload: ChangeNicknameRequest,
+    auth: AuthContext = Depends(_auth_user_from_header),
+) -> ChangeNicknameResponse:
+    result = service.change_nickname(auth.player_id, payload.nickname)
+    return ChangeNicknameResponse(**result)
+
+
+# ── Favourite words ──
+
+@api_router.get("/players/me/favourites", response_model=list[FavouriteWordItem])
+async def list_favourites(
+    auth: AuthContext = Depends(_auth_user_from_header),
+) -> list[FavouriteWordItem]:
+    rows = service.list_favourites(auth.player_id)
+    return [FavouriteWordItem(**row) for row in rows]
+
+
+@api_router.post("/players/me/favourites", response_model=FavouriteWordItem, status_code=201)
+async def add_favourite(
+    payload: AddFavouriteRequest,
+    auth: AuthContext = Depends(_auth_user_from_header),
+) -> FavouriteWordItem:
+    result = service.add_favourite(auth.player_id, payload.word_id)
+    return FavouriteWordItem(**result)
+
+
+@api_router.delete("/players/me/favourites/{word_id}")
+async def remove_favourite(
+    word_id: str,
+    auth: AuthContext = Depends(_auth_user_from_header),
+) -> dict:
+    return service.remove_favourite(auth.player_id, word_id)
+
+
 @api_router.get("/players/{player_id}/history")
 async def player_history(
     player_id: str,
@@ -370,6 +425,76 @@ async def dictionary_search(
         ).mappings().all()
 
     return [DictionaryEntryItem(**dict(row)) for row in rows]
+
+
+# ── Custom words (Feature 9) ──
+
+@api_router.post("/players/me/words", response_model=CustomWordItem, status_code=201)
+async def add_custom_word(
+    payload: AddCustomWordRequest,
+    auth: AuthContext = Depends(_auth_user_from_header),
+) -> CustomWordItem:
+    result = service.add_custom_word(auth.player_id, payload.ua_word, payload.en_word)
+    return CustomWordItem(**result)
+
+
+@api_router.get("/players/me/words", response_model=list[CustomWordItem])
+async def list_custom_words(
+    auth: AuthContext = Depends(_auth_user_from_header),
+) -> list[CustomWordItem]:
+    rows = service.list_custom_words(auth.player_id)
+    return [CustomWordItem(**row) for row in rows]
+
+
+@api_router.delete("/players/me/words/{word_id}")
+async def delete_custom_word(
+    word_id: str,
+    auth: AuthContext = Depends(_auth_user_from_header),
+) -> dict:
+    return service.delete_custom_word(auth.player_id, word_id)
+
+
+# ── Wrong words (Feature 10) ──
+
+@api_router.get("/players/me/wrong-words", response_model=list[WrongWordItem])
+async def wrong_words(
+    auth: AuthContext = Depends(_auth_user_from_header),
+    limit: int = Query(default=50, le=100),
+) -> list[WrongWordItem]:
+    rows = service.get_wrong_words(auth.player_id, limit=limit)
+    return [WrongWordItem(**row) for row in rows]
+
+
+# ── Second chance submit (Feature 7) ──
+
+@api_router.post("/rooms/{room_code}/second-chance")
+async def submit_second_chance(
+    room_code: str,
+    payload: SubmitAnswerRequest,
+    request: Request,
+    auth: AuthContext = Depends(_auth_user_from_header),
+) -> dict:
+    result = await service.submit_second_chance(
+        room_code=room_code,
+        player_id=auth.player_id,
+        answer=payload.answer,
+        ip=_client_ip_from_request(request),
+    )
+    return result
+
+
+# ── Admin: Re-evaluate CEFR levels (Feature 6) ──
+
+@api_router.post("/admin/evaluate-levels")
+async def admin_evaluate_levels(
+    payload: EvaluateLevelsRequest,
+    auth: AuthContext = Depends(_auth_user_from_header),
+) -> dict:
+    if not auth.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    from .services.admin_service import evaluate_word_levels
+    result = await evaluate_word_levels(batch_size=payload.batch_size, max_words=payload.max_words)
+    return result
 
 
 @api_router.post("/admin/batch-seed")
@@ -575,7 +700,7 @@ async def websocket_room(websocket: WebSocket, room_code: str) -> None:
                 await websocket.send_json({"type": "left", "detail": "You left the room"})
                 return
 
-            if msg_type not in {"submit", "move"}:
+            if msg_type not in {"submit", "move", "second_chance"}:
                 await websocket.send_json({"type": "error", "detail": "Unsupported message type"})
                 continue
 
@@ -598,13 +723,21 @@ async def websocket_room(websocket: WebSocket, room_code: str) -> None:
                 continue
 
             try:
-                result = await service.submit_answer(
-                    room_code=room_code,
-                    player_id=auth.player_id,
-                    answer=answer,
-                    ip=ip,
-                    channel="ws",
-                )
+                if msg_type == "second_chance":
+                    result = await service.submit_second_chance(
+                        room_code=room_code,
+                        player_id=auth.player_id,
+                        answer=answer,
+                        ip=ip,
+                    )
+                else:
+                    result = await service.submit_answer(
+                        room_code=room_code,
+                        player_id=auth.player_id,
+                        answer=answer,
+                        ip=ip,
+                        channel="ws",
+                    )
             except HTTPException as exc:
                 await websocket.send_json({"type": "error", "detail": exc.detail, "status": exc.status_code})
                 continue
@@ -618,6 +751,15 @@ async def websocket_room(websocket: WebSocket, room_code: str) -> None:
                 {"type": "leaderboard", "data": service.leaderboard(10, period="all")},
             )
             await ws_manager.send_to_player(room_code.upper(), auth.player_id, {"type": "submit_ack", "data": result})
+
+            # Broadcast second_chance info if applicable
+            if result.get("second_chance") and result.get("second_chance_player_id"):
+                await ws_manager.broadcast(room_code.upper(), {
+                    "type": "second_chance",
+                    "player_id": result["second_chance_player_id"],
+                    "word": result.get("correct_answer", ""),
+                    "time_limit": 10,
+                })
 
     except WebSocketDisconnect:
         pass

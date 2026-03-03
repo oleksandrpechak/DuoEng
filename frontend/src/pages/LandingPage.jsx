@@ -19,6 +19,9 @@ import {
   Trophy,
   XCircle,
   Gamepad2,
+  Star,
+  Bot,
+  Swords,
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
@@ -76,6 +79,9 @@ export default function LandingPage() {
   const [mode, setMode] = useState("classic");
   const [targetScore, setTargetScore] = useState(10);
   const [wordLevel, setWordLevel] = useState("B1");
+  const [useFavourites, setUseFavourites] = useState(false);
+  const [useCustomWords, setUseCustomWords] = useState(false);
+  const [aiDifficulty, setAiDifficulty] = useState("medium");
   const [isLoading, setIsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("create");
 
@@ -91,6 +97,8 @@ export default function LandingPage() {
   const [historyPage, setHistoryPage] = useState(1);
   const [platformStats, setPlatformStats] = useState(null);
   const [isSignedIn, setIsSignedIn] = useState(() => !!sessionStorage.getItem("accessToken"));
+  const [favouriteWordIds, setFavouriteWordIds] = useState(new Set());
+  const [favouriteLoading, setFavouriteLoading] = useState(new Set());
 
   // Navigation guard: redirect to /me if already signed in
   // (skip if Google OAuth callback params are present — they need processing first)
@@ -213,15 +221,25 @@ export default function LandingPage() {
     }
 
     try {
-      const response = await api.post("/rooms", {
+      const body = {
         mode,
         target_score: targetScore,
         word_level: wordLevel,
-      });
+        use_favourites: useFavourites,
+        use_custom_words: useCustomWords,
+      };
+      if (mode === "vs_ai") {
+        body.ai_difficulty = aiDifficulty;
+      }
+      const response = await api.post("/rooms", body);
       toast.success("Room created!");
-      navigate(`/lobby/${response.data.code}`);
+      if (mode === "vs_ai") {
+        navigate(`/game/${response.data.code}`);
+      } else {
+        navigate(`/lobby/${response.data.code}`);
+      }
     } catch (error) {
-      toast.error("Failed to create room");
+      toast.error(error.response?.data?.detail || "Failed to create room");
     }
     setIsLoading(false);
   };
@@ -278,10 +296,52 @@ export default function LandingPage() {
       }
       const response = await api.get("/dictionary/search", { params });
       setDictionaryResults(response.data || []);
+
+      // Load favourites to show star state
+      try {
+        const favResponse = await api.get("/players/me/favourites");
+        const ids = new Set((favResponse.data || []).map((f) => f.word_id));
+        setFavouriteWordIds(ids);
+      } catch {
+        // ignore if favourites fail to load
+      }
     } catch (error) {
       toast.error(error.response?.data?.detail || "Dictionary search failed");
     }
     setIsFeatureLoading(false);
+  };
+
+  const handleToggleFavourite = async (entry) => {
+    const authed = await ensureAuth();
+    if (!authed) return;
+
+    // Build a word_id from the en_word (matching the seed logic)
+    const wordId = entry.en_word.toLowerCase().replace(/ /g, "_").replace(/'/g, "").slice(0, 64);
+
+    setFavouriteLoading((prev) => new Set(prev).add(wordId));
+    try {
+      if (favouriteWordIds.has(wordId)) {
+        await api.delete(`/players/me/favourites/${wordId}`);
+        setFavouriteWordIds((prev) => {
+          const next = new Set(prev);
+          next.delete(wordId);
+          return next;
+        });
+        toast.success("Removed from favourites");
+      } else {
+        await api.post("/players/me/favourites", { word_id: wordId });
+        setFavouriteWordIds((prev) => new Set(prev).add(wordId));
+        toast.success("Added to favourites ⭐");
+      }
+    } catch (error) {
+      const detail = error.response?.data?.detail || "Failed to update favourite";
+      toast.error(detail);
+    }
+    setFavouriteLoading((prev) => {
+      const next = new Set(prev);
+      next.delete(wordId);
+      return next;
+    });
   };
 
   const loadLeaderboard = async (period) => {
@@ -418,7 +478,7 @@ export default function LandingPage() {
         </div>
       )}
 
-      <Card className="w-full max-w-md rounded-3xl shadow-soft border-0" data-testid="main-card">
+      <Card className="w-full max-w-md lg:max-w-lg rounded-3xl shadow-soft border-0" data-testid="main-card">
         <CardHeader className="text-center pb-2">
           <CardTitle className="font-heading text-2xl">Enter the Arena</CardTitle>
           <CardDescription>Create a new game or join an existing one</CardDescription>
@@ -467,29 +527,43 @@ export default function LandingPage() {
             />
           </div>
 
-          <div className="flex gap-2 p-1 bg-muted rounded-full">
+          <div className="flex gap-1 p-1 bg-muted rounded-full">
             <button
               data-testid="create-tab"
-              className={`flex-1 py-2 px-4 rounded-full text-sm font-medium transition-all ${
+              className={`flex-1 py-2 px-3 rounded-full text-sm font-medium transition-all ${
                 activeTab === "create" ? "bg-white shadow-sm text-black" : "text-muted-foreground hover:text-foreground"
               }`}
-              onClick={() => setActiveTab("create")}
+              onClick={() => { setActiveTab("create"); setMode("classic"); }}
             >
-              Create Room
+              <Users className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
+              PvP
+            </button>
+            <button
+              data-testid="ai-tab"
+              className={`flex-1 py-2 px-3 rounded-full text-sm font-medium transition-all ${
+                activeTab === "ai" ? "bg-white shadow-sm text-black" : "text-muted-foreground hover:text-foreground"
+              }`}
+              onClick={() => { setActiveTab("ai"); setMode("vs_ai"); }}
+            >
+              <Bot className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
+              vs AI
             </button>
             <button
               data-testid="join-tab"
-              className={`flex-1 py-2 px-4 rounded-full text-sm font-medium transition-all ${
+              className={`flex-1 py-2 px-3 rounded-full text-sm font-medium transition-all ${
                 activeTab === "join" ? "bg-white shadow-sm text-black" : "text-muted-foreground hover:text-foreground"
               }`}
               onClick={() => setActiveTab("join")}
             >
-              Join Room
+              <Swords className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
+              Join
             </button>
           </div>
 
-          {activeTab === "create" && (
+          {(activeTab === "create" || activeTab === "ai") && (
             <div className="space-y-4 animate-fade-in-up">
+              {/* Mode selection – only for PvP tab */}
+              {activeTab === "create" && (
               <div className="space-y-3">
                 <Label className="text-sm font-medium">Game Mode</Label>
                 <RadioGroup value={mode} onValueChange={setMode} className="grid grid-cols-2 gap-3">
@@ -519,6 +593,16 @@ export default function LandingPage() {
                   </Label>
                 </RadioGroup>
               </div>
+              )}
+
+              {/* AI mode header */}
+              {activeTab === "ai" && (
+                <div className="text-center p-3 rounded-2xl bg-primary/5 border border-primary/20">
+                  <Bot className="w-8 h-8 mx-auto text-primary mb-1" />
+                  <p className="font-heading text-lg font-bold">Play vs AI</p>
+                  <p className="text-xs text-muted-foreground">Challenge the bot and practice your vocabulary</p>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label className="text-sm font-medium">Target Score</Label>
@@ -570,13 +654,114 @@ export default function LandingPage() {
                 </div>
               </div>
 
+              {/* Use Favourite Words toggle */}
+              {isSignedIn && (
+                <div className="flex items-center justify-between p-3 rounded-2xl border border-border bg-background">
+                  <div className="flex items-center gap-2">
+                    <Star className={`w-5 h-5 ${useFavourites ? "text-yellow-500 fill-yellow-500" : "text-muted-foreground"}`} />
+                    <div>
+                      <p className="text-sm font-medium">Play with my favourite words</p>
+                      <p className="text-xs text-muted-foreground">Use words you've saved ⭐</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={useFavourites}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      useFavourites ? "bg-primary" : "bg-muted"
+                    }`}
+                    onClick={() => setUseFavourites(!useFavourites)}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        useFavourites ? "translate-x-6" : "translate-x-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+              )}
+
+              {/* Custom Words toggle */}
+              {isSignedIn && (
+                <div className="flex items-center justify-between p-3 rounded-2xl border border-border bg-background">
+                  <div className="flex items-center gap-2">
+                    <BookOpen className={`w-5 h-5 ${useCustomWords ? "text-primary" : "text-muted-foreground"}`} />
+                    <div>
+                      <p className="text-sm font-medium">Include my custom words</p>
+                      <p className="text-xs text-muted-foreground">Mix in words you added ✏️</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={useCustomWords}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      useCustomWords ? "bg-primary" : "bg-muted"
+                    }`}
+                    onClick={() => setUseCustomWords(!useCustomWords)}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        useCustomWords ? "translate-x-6" : "translate-x-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+              )}
+
+              {/* AI Difficulty (for VS AI mode) */}
+              {activeTab === "ai" && (
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">AI Difficulty</Label>
+                  <RadioGroup value={aiDifficulty} onValueChange={setAiDifficulty} className="grid grid-cols-3 gap-3">
+                    <Label
+                      htmlFor="easy"
+                      data-testid="ai-difficulty-easy"
+                      className={`flex flex-col items-center p-4 rounded-2xl border-2 cursor-pointer transition-all ${
+                        aiDifficulty === "easy" ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+                      }`}
+                    >
+                      <RadioGroupItem value="easy" id="easy" className="sr-only" />
+                      <Users className="w-6 h-6 mb-2 text-primary-foreground" />
+                      <span className="font-medium text-sm">Easy</span>
+                      <span className="text-xs text-muted-foreground">For practice</span>
+                    </Label>
+                    <Label
+                      htmlFor="medium"
+                      data-testid="ai-difficulty-medium"
+                      className={`flex flex-col items-center p-4 rounded-2xl border-2 cursor-pointer transition-all ${
+                        aiDifficulty === "medium" ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+                      }`}
+                    >
+                      <RadioGroupItem value="medium" id="medium" className="sr-only" />
+                      <Bot className="w-6 h-6 mb-2 text-accent-foreground" />
+                      <span className="font-medium text-sm">Medium</span>
+                      <span className="text-xs text-muted-foreground">Balanced challenge</span>
+                    </Label>
+                    <Label
+                      htmlFor="hard"
+                      data-testid="ai-difficulty-hard"
+                      className={`flex flex-col items-center p-4 rounded-2xl border-2 cursor-pointer transition-all ${
+                        aiDifficulty === "hard" ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+                      }`}
+                    >
+                      <RadioGroupItem value="hard" id="hard" className="sr-only" />
+                      <Trophy className="w-6 h-6 mb-2 text-yellow-500" />
+                      <span className="font-medium text-sm">Hard</span>
+                      <span className="text-xs text-muted-foreground">For experts</span>
+                    </Label>
+                  </RadioGroup>
+                </div>
+              )}
+
               <Button
                 data-testid="create-room-btn"
                 className="w-full rounded-full h-12 text-base font-bold bg-primary hover:bg-primary/90"
                 onClick={handleCreateRoom}
                 disabled={isLoading}
               >
-                {isLoading ? "Creating..." : "Create Room"}
+                {isLoading ? "Creating..." : activeTab === "ai" ? "Start vs AI" : "Create Room"}
               </Button>
             </div>
           )}
@@ -609,7 +794,7 @@ export default function LandingPage() {
         </CardContent>
       </Card>
 
-      <Card className="w-full max-w-md mt-4 rounded-3xl border border-border/70 bg-card/90 backdrop-blur" data-testid="feature-tools">
+      <Card className="w-full max-w-md lg:max-w-lg mt-4 rounded-3xl border border-border/70 bg-card/90 backdrop-blur" data-testid="feature-tools">
         <CardHeader className="pb-2">
           <CardTitle className="text-base font-semibold tracking-wide">Features</CardTitle>
           <CardDescription>Dictionary, leaderboard, stats &amp; history</CardDescription>
@@ -688,15 +873,31 @@ export default function LandingPage() {
                 {dictionaryResults.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No results yet.</p>
                 ) : (
-                  dictionaryResults.map((entry, idx) => (
-                    <div key={`${entry.ua_word}-${entry.en_word}-${idx}`} className="rounded-xl bg-muted p-2 text-sm">
-                      <div className="flex items-center justify-between">
-                        <p className="font-medium">{entry.ua_word} → {entry.en_word}</p>
-                        {entry.level && <CefrBadge level={entry.level} short className="ml-2 text-[10px] px-1.5 py-0" />}
+                  dictionaryResults.map((entry, idx) => {
+                    const wordId = entry.en_word.toLowerCase().replace(/ /g, "_").replace(/'/g, "").slice(0, 64);
+                    const isFav = favouriteWordIds.has(wordId);
+                    const isFavLoading = favouriteLoading.has(wordId);
+                    return (
+                      <div key={`${entry.ua_word}-${entry.en_word}-${idx}`} className="rounded-xl bg-muted p-2 text-sm">
+                        <div className="flex items-center justify-between">
+                          <p className="font-medium flex-1 min-w-0 truncate">{entry.ua_word} → {entry.en_word}</p>
+                          <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+                            {entry.level && <CefrBadge level={entry.level} short className="text-[10px] px-1.5 py-0" />}
+                            <button
+                              type="button"
+                              className="p-1 rounded-full hover:bg-background/50 transition-colors disabled:opacity-50"
+                              onClick={() => handleToggleFavourite(entry)}
+                              disabled={isFavLoading}
+                              title={isFav ? "Remove from favourites" : "Add to favourites"}
+                            >
+                              <Star className={`w-4 h-4 ${isFav ? "text-yellow-500 fill-yellow-500" : "text-muted-foreground"}`} />
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-xs text-muted-foreground">{entry.part_of_speech || "n/a"} • {entry.source}</p>
                       </div>
-                      <p className="text-xs text-muted-foreground">{entry.part_of_speech || "n/a"} • {entry.source}</p>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -861,7 +1062,7 @@ export default function LandingPage() {
 
       <Button
         variant="outline"
-        className="w-full max-w-md mt-3 rounded-full"
+        className="w-full max-w-md lg:max-w-lg mt-3 rounded-full"
         onClick={() => navigate("/word-levels")}
       >
         Open Word Levels

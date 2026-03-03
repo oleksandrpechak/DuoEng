@@ -22,9 +22,13 @@ class GuestAuthResponse(BaseModel):
 class CreateRoomRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["classic", "challenge"] = "classic"
+    mode: Literal["classic", "challenge", "vs_ai"] = "classic"
     target_score: int = Field(default=10, ge=1, le=100)
     word_level: Literal["A1", "A2", "B1", "B2", "C1", "C2"] = "B1"
+    use_favourites: bool = False
+    use_custom_words: bool = False
+    ai_difficulty: Optional[Literal["easy", "medium", "hard"]] = None
+    word_ids: Optional[list[str]] = None  # For "practice wrong words" mode
 
 
 class JoinRoomResponse(BaseModel):
@@ -33,6 +37,8 @@ class JoinRoomResponse(BaseModel):
     status: str
     room_link: Optional[str] = None
     word_level: Optional[str] = None
+    mode: Optional[str] = None
+    ai_difficulty: Optional[str] = None
 
 
 class SubmitAnswerRequest(BaseModel):
@@ -163,3 +169,72 @@ class WsPingMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["ping"]
+
+
+# ── Nickname change ──
+
+class ChangeNicknameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    nickname: str = Field(min_length=2, max_length=20)
+
+
+class ChangeNicknameResponse(BaseModel):
+    player_id: str
+    nickname: str
+    access_token: str
+    token_type: str = "bearer"
+
+
+# ── Favourite words ──
+
+class FavouriteWordItem(BaseModel):
+    id: int
+    word_id: str
+    ua: str
+    en: str
+    level: str
+    added_at: str
+
+
+class AddFavouriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    word_id: str = Field(min_length=1, max_length=64)
+
+
+# ── Custom words ──
+
+class AddCustomWordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    ua_word: str = Field(min_length=1, max_length=100)
+    en_word: str = Field(min_length=1, max_length=100)
+
+
+class CustomWordItem(BaseModel):
+    id: str
+    ua_word: str
+    en_word: str
+    level: str
+    approved: bool
+    created_at: str
+
+
+# ── Wrong words ──
+
+class WrongWordItem(BaseModel):
+    ua_word: str
+    correct_answer: str
+    user_answer: str
+    times_wrong: int
+    created_at: Optional[str] = None
+
+
+# ── Admin evaluate levels ──
+
+class EvaluateLevelsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    batch_size: int = Field(default=50, ge=1, le=200)
+    max_words: Optional[int] = Field(default=None, ge=1, le=5000)

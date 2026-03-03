@@ -5,6 +5,18 @@
     @apply max-w-md mx-auto min-h-screen flex flex-col;
 }
 
+/* Safe area for mobile bottom navigation */
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Desktop layout container */
+@media (min-width: 1024px) {
+  .app-container {
+    @apply max-w-2xl;
+  }
+}
+
 /* Card styles */
 .game-card {
     @apply bg-card rounded-3xl shadow-soft p-6;
@@ -64,4 +76,18 @@
 
 .feedback-wrong {
     @apply bg-destructive text-destructive-foreground;
+}
+
+/* Slide in from right animation (mobile nav) */
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.25s ease-out;
 }
