@@ -65,7 +65,7 @@ def upgrade() -> None:
             sa.Column("ua_word", sa.Text, nullable=False),
             sa.Column("en_word", sa.Text, nullable=False),
             sa.Column("level", sa.String(2), nullable=False, server_default="B1"),
-            sa.Column("approved", sa.Boolean, nullable=False, server_default=sa.text("1")),
+            sa.Column("approved", sa.Boolean, nullable=False, server_default=sa.text("true")),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.UniqueConstraint("player_id", "ua_word", "en_word", name="uq_custom_words_player_ua_en"),
         )
