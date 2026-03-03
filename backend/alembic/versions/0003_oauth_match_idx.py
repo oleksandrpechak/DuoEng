@@ -1,7 +1,6 @@
 """add google_id and email to players, index on matches.started_at."""
 
 from alembic import op
-from sqlalchemy import inspect
 import sqlalchemy as sa
 
 
@@ -13,16 +12,36 @@ depends_on = None
 
 def _column_exists(table_name: str, column_name: str) -> bool:
     bind = op.get_bind()
-    insp = inspect(bind)
-    columns = [c["name"] for c in insp.get_columns(table_name)]
-    return column_name in columns
+    dialect = bind.dialect.name
+    if dialect == "sqlite":
+        result = bind.execute(sa.text(f"PRAGMA table_info({table_name})"))
+        columns = [row[1] for row in result]
+        return column_name in columns
+    else:
+        result = bind.execute(
+            sa.text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name=:t AND column_name=:c AND table_schema='public'"
+            ),
+            {"t": table_name, "c": column_name},
+        )
+        return result.scalar() is not None
 
 
-def _index_exists(table_name: str, index_name: str) -> bool:
+def _index_exists(index_name: str) -> bool:
     bind = op.get_bind()
-    insp = inspect(bind)
-    indexes = [idx["name"] for idx in insp.get_indexes(table_name)]
-    return index_name in indexes
+    dialect = bind.dialect.name
+    if dialect == "sqlite":
+        result = bind.execute(
+            sa.text("SELECT 1 FROM sqlite_master WHERE type='index' AND name=:n"),
+            {"n": index_name},
+        )
+    else:
+        result = bind.execute(
+            sa.text("SELECT 1 FROM pg_indexes WHERE indexname=:n"),
+            {"n": index_name},
+        )
+    return result.scalar() is not None
 
 
 def upgrade() -> None:
@@ -31,22 +50,22 @@ def upgrade() -> None:
         op.add_column("players", sa.Column("google_id", sa.String(128), nullable=True))
     if not _column_exists("players", "email"):
         op.add_column("players", sa.Column("email", sa.String(256), nullable=True))
-    if not _index_exists("players", "ix_players_google_id"):
+    if not _index_exists("ix_players_google_id"):
         op.create_index("ix_players_google_id", "players", ["google_id"], unique=True)
-    if not _index_exists("players", "ix_players_email"):
+    if not _index_exists("ix_players_email"):
         op.create_index("ix_players_email", "players", ["email"], unique=True)
 
     # Leaderboard time-range queries
-    if not _index_exists("matches", "ix_matches_started_at"):
+    if not _index_exists("ix_matches_started_at"):
         op.create_index("ix_matches_started_at", "matches", ["started_at"], unique=False)
 
 
 def downgrade() -> None:
-    if _index_exists("matches", "ix_matches_started_at"):
+    if _index_exists("ix_matches_started_at"):
         op.drop_index("ix_matches_started_at", table_name="matches")
-    if _index_exists("players", "ix_players_email"):
+    if _index_exists("ix_players_email"):
         op.drop_index("ix_players_email", table_name="players")
-    if _index_exists("players", "ix_players_google_id"):
+    if _index_exists("ix_players_google_id"):
         op.drop_index("ix_players_google_id", table_name="players")
     if _column_exists("players", "email"):
         op.drop_column("players", "email")

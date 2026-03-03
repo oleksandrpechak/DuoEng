@@ -1,7 +1,6 @@
 """expand CEFR levels for words, add word_level to rooms."""
 
 from alembic import op
-from sqlalchemy import inspect
 import sqlalchemy as sa
 
 
@@ -15,9 +14,20 @@ VALID_LEVELS = "('A1', 'A2', 'B1', 'B2', 'C1', 'C2')"
 
 def _column_exists(table_name: str, column_name: str) -> bool:
     bind = op.get_bind()
-    insp = inspect(bind)
-    columns = [c["name"] for c in insp.get_columns(table_name)]
-    return column_name in columns
+    dialect = bind.dialect.name
+    if dialect == "sqlite":
+        result = bind.execute(sa.text(f"PRAGMA table_info({table_name})"))
+        columns = [row[1] for row in result]
+        return column_name in columns
+    else:
+        result = bind.execute(
+            sa.text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name=:t AND column_name=:c AND table_schema='public'"
+            ),
+            {"t": table_name, "c": column_name},
+        )
+        return result.scalar() is not None
 
 
 def upgrade() -> None:

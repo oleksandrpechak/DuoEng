@@ -5,7 +5,6 @@ Revises: 0005_favourite_words
 """
 
 from alembic import op
-from sqlalchemy import inspect
 import sqlalchemy as sa
 
 
@@ -16,15 +15,38 @@ depends_on = None
 
 
 def _table_exists(table_name: str) -> bool:
+    """Raw SQL check — works reliably inside Alembic transactions on both PG and SQLite."""
     bind = op.get_bind()
-    insp = inspect(bind)
-    return table_name in insp.get_table_names()
+    dialect = bind.dialect.name
+    if dialect == "sqlite":
+        result = bind.execute(
+            sa.text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:t"),
+            {"t": table_name},
+        )
+    else:
+        result = bind.execute(
+            sa.text("SELECT 1 FROM information_schema.tables WHERE table_name=:t AND table_schema='public'"),
+            {"t": table_name},
+        )
+    return result.scalar() is not None
 
 
 def _column_exists(table_name: str, column_name: str) -> bool:
+    """Raw SQL check for column existence."""
     bind = op.get_bind()
-    insp = inspect(bind)
-    columns = [c["name"] for c in insp.get_columns(table_name)]
+    dialect = bind.dialect.name
+    if dialect == "sqlite":
+        result = bind.execute(sa.text(f"PRAGMA table_info({table_name})"))
+        columns = [row[1] for row in result]
+    else:
+        result = bind.execute(
+            sa.text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name=:t AND column_name=:c AND table_schema='public'"
+            ),
+            {"t": table_name, "c": column_name},
+        )
+        return result.scalar() is not None
     return column_name in columns
 
 
@@ -45,11 +67,7 @@ def upgrade() -> None:
             sa.Column("level", sa.String(2), nullable=False, server_default="B1"),
             sa.Column("approved", sa.Boolean, nullable=False, server_default=sa.text("1")),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        )
-        op.create_unique_constraint(
-            "uq_custom_words_player_ua_en",
-            "custom_words",
-            ["player_id", "ua_word", "en_word"],
+            sa.UniqueConstraint("player_id", "ua_word", "en_word", name="uq_custom_words_player_ua_en"),
         )
         op.create_index(
             "ix_custom_words_player_id",

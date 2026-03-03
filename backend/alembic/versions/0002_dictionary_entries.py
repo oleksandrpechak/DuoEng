@@ -1,7 +1,6 @@
 """add dictionary entries table."""
 
 from alembic import op
-from sqlalchemy import inspect
 import sqlalchemy as sa
 
 
@@ -13,8 +12,18 @@ depends_on = None
 
 def _table_exists(table_name: str) -> bool:
     bind = op.get_bind()
-    insp = inspect(bind)
-    return table_name in insp.get_table_names()
+    dialect = bind.dialect.name
+    if dialect == "sqlite":
+        result = bind.execute(
+            sa.text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:t"),
+            {"t": table_name},
+        )
+    else:
+        result = bind.execute(
+            sa.text("SELECT 1 FROM information_schema.tables WHERE table_name=:t AND table_schema='public'"),
+            {"t": table_name},
+        )
+    return result.scalar() is not None
 
 
 def upgrade() -> None:

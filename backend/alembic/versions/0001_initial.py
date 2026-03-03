@@ -10,7 +10,27 @@ branch_labels = None
 depends_on = None
 
 
+def _table_exists(table_name: str) -> bool:
+    bind = op.get_bind()
+    dialect = bind.dialect.name
+    if dialect == "sqlite":
+        result = bind.execute(
+            sa.text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:t"),
+            {"t": table_name},
+        )
+    else:
+        result = bind.execute(
+            sa.text("SELECT 1 FROM information_schema.tables WHERE table_name=:t AND table_schema='public'"),
+            {"t": table_name},
+        )
+    return result.scalar() is not None
+
+
 def upgrade() -> None:
+    # If the core table already exists, the schema was created by create_all — skip.
+    if _table_exists("players"):
+        return
+
     op.create_table(
         "players",
         sa.Column("id", sa.String(length=36), nullable=False),
