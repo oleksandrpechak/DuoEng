@@ -1,6 +1,7 @@
 """add dictionary entries table."""
 
 from alembic import op
+from sqlalchemy import inspect
 import sqlalchemy as sa
 
 
@@ -10,7 +11,16 @@ branch_labels = None
 depends_on = None
 
 
+def _table_exists(table_name: str) -> bool:
+    bind = op.get_bind()
+    insp = inspect(bind)
+    return table_name in insp.get_table_names()
+
+
 def upgrade() -> None:
+    if _table_exists("dictionary_entries"):
+        return
+
     op.create_table(
         "dictionary_entries",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -27,6 +37,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if not _table_exists("dictionary_entries"):
+        return
     op.drop_index("ix_dictionary_entries_en_word", table_name="dictionary_entries")
     op.drop_index("ix_dictionary_entries_ua_word", table_name="dictionary_entries")
     op.drop_table("dictionary_entries")

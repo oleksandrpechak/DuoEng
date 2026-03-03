@@ -1,6 +1,7 @@
 """Add favourite_words table for per-player word bookmarks."""
 
 from alembic import op
+from sqlalchemy import inspect
 import sqlalchemy as sa
 
 
@@ -10,7 +11,17 @@ branch_labels = None
 depends_on = None
 
 
+def _table_exists(table_name: str) -> bool:
+    """Check if a table already exists (safe for both SQLite and PostgreSQL)."""
+    bind = op.get_bind()
+    insp = inspect(bind)
+    return table_name in insp.get_table_names()
+
+
 def upgrade() -> None:
+    if _table_exists("favourite_words"):
+        return
+
     op.create_table(
         "favourite_words",
         sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
@@ -42,6 +53,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if not _table_exists("favourite_words"):
+        return
     op.drop_index("ix_favourite_words_player_id", table_name="favourite_words")
     op.drop_constraint("uq_favourite_words_player_word", "favourite_words", type_="unique")
     op.drop_table("favourite_words")
