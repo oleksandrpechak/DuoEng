@@ -120,8 +120,12 @@ def init_db() -> None:
 # ---------------------------------------------------------------------------
 
 def _find_csv_path() -> str | None:
-    """Locate dictionary_clean.csv by checking common locations."""
+    """Locate the best dictionary CSV, preferring Oxford processed data."""
     candidates = [
+        # Oxford 5000 processed data — highest priority
+        Path(__file__).parent / "seeds" / "oxford_processed.csv",
+        Path(__file__).parent.parent / "seeds" / "oxford_processed.csv",
+        # Legacy dictionary_clean.csv — fallback only
         Path(__file__).parent / "data" / "processed" / "dictionary_clean.csv",
         Path(__file__).parent / "seeds" / "dictionary_clean.csv",
         Path(__file__).parent / "dictionary_clean.csv",
@@ -185,10 +189,11 @@ def seed_from_csv(force: bool = False) -> int:
     csv_path = _find_csv_path()
 
     if not csv_path:
-        logger.warning("dictionary_clean.csv NOT FOUND — searched common paths")
+        logger.warning("No dictionary CSV found — searched common paths")
         return 0
 
-    logger.info("Found CSV at: %s", csv_path)
+    is_oxford = "oxford_processed" in csv_path
+    logger.info("Found CSV at: %s (oxford=%s)", csv_path, is_oxford)
 
     with get_db() as session:
         existing_count = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
@@ -206,11 +211,23 @@ def seed_from_csv(force: bool = False) -> int:
     logger.info("CSV format detected: %s", fmt)
 
     is_sqlite = settings.database_url.startswith("sqlite")
-    word_sql = (
-        "INSERT OR IGNORE INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level)"
-        if is_sqlite
-        else "INSERT INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level) ON CONFLICT (id) DO NOTHING"
-    )
+
+    # For Oxford data, use upsert (DO UPDATE) so reseeds update existing rows.
+    # For legacy CSV, use DO NOTHING to be safe.
+    if is_oxford:
+        word_sql = (
+            "INSERT INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level) "
+            "ON CONFLICT (id) DO UPDATE SET ua = :ua, en = :en, level = :level"
+            if not is_sqlite
+            else "INSERT OR REPLACE INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level)"
+        )
+    else:
+        word_sql = (
+            "INSERT OR IGNORE INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level)"
+            if is_sqlite
+            else "INSERT INTO words (id, ua, en, level) VALUES (:id, :ua, :en, :level) ON CONFLICT (id) DO NOTHING"
+        )
+
     dict_sql = (
         "INSERT OR IGNORE INTO dictionary_entries (ua_word, en_word, part_of_speech, source, created_at) "
         "VALUES (:ua_word, :en_word, :part_of_speech, :source, :created_at)"
@@ -284,7 +301,7 @@ def seed_from_csv(force: bool = False) -> int:
                     pos_raw = (row.get(pos_col) or "").strip() if pos_col else ""
                     pos = _expand_pos(pos_raw)
                     level = (row.get(level_col) or "B1").strip().upper() if level_col else "B1"
-                    source = (row.get(source_col) or "csv").strip() if source_col else "csv"
+                    source = (row.get(source_col) or ("oxford" if is_oxford else "csv")).strip() if source_col else ("oxford" if is_oxford else "csv")
 
                     if not ua or not en:
                         continue
@@ -388,8 +405,10 @@ def seed_from_csv(force: bool = False) -> int:
                 inserted_words += w
                 inserted_dict += d
 
+    source_label = "Oxford 5000" if is_oxford else "CSV"
     logger.info(
-        "CSV seed complete: %d unique words, %d dictionary entries from %d rows",
+        "%s seed complete: %d unique words, %d dictionary entries from %d rows",
+        source_label,
         inserted_words,
         inserted_dict,
         rows_processed,
