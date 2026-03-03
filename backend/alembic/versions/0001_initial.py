@@ -110,7 +110,7 @@ def upgrade() -> None:
         sa.Column("score_awarded", sa.Integer(), nullable=False),
         sa.Column("response_time", sa.Float(), nullable=False),
         sa.Column("scoring_source", sa.String(length=32), nullable=False),
-        sa.Column("is_timeout", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("is_timeout", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["match_id"], ["matches.id"]),
         sa.ForeignKeyConstraint(["player_id"], ["players.id"]),
