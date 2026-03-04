@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.config import settings
-from app.db import init_db, reset_database_engine, seed_sample_words_if_empty
+from app.db import init_db, reset_database_engine, seed_from_dmklinger
 from app.main import app
 from app.services.gemini_service import GeminiConfigurationError, GeminiServiceTimeoutError
 
@@ -18,7 +18,7 @@ def isolated_db(tmp_path: Path):
     object.__setattr__(settings, "database_url", test_url)
     reset_database_engine(test_url)
     init_db()
-    seed_sample_words_if_empty()
+    seed_from_dmklinger()
 
     try:
         yield

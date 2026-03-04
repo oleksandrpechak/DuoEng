@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import text
 
 from app.config import settings
-from app.db import get_db, init_db, reset_database_engine, seed_sample_words_if_empty
+from app.db import get_db, init_db, reset_database_engine, seed_from_dmklinger
 from app.main import app
 
 
@@ -18,7 +18,7 @@ def isolated_db(tmp_path: Path):
     object.__setattr__(settings, "database_url", test_url)
     reset_database_engine(test_url)
     init_db()
-    seed_sample_words_if_empty()
+    seed_from_dmklinger()
 
     try:
         yield

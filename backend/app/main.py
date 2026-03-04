@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -14,7 +15,7 @@ from sqlalchemy import text
 from starlette.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .db import check_db_connection, clear_expired_llm_cache, get_db, init_db, seed_sample_words_if_empty
+from .db import check_db_connection, clear_expired_llm_cache, get_db, init_db, seed_from_dmklinger
 from .game_service import GameService
 from .logging_utils import configure_logging
 from .metrics import CONTENT_TYPE_LATEST, REQUESTS_TOTAL, generate_latest
@@ -91,7 +92,8 @@ async def startup_event() -> None:
     # open port is detected within ~5 minutes.
     def _background_seed():
         try:
-            seeded = seed_sample_words_if_empty()
+            force = os.environ.get("FORCE_RESEED", "0") == "1"
+            seeded = seed_from_dmklinger(force=force)
             logger.info(
                 "Background seed complete",
                 extra={"event": "seed_done", "seeded_words": seeded},

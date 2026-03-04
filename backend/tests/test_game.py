@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import text
 
 from app.config import settings
-from app.db import get_db, init_db, reset_database_engine, seed_sample_words_if_empty
+from app.db import get_db, init_db, reset_database_engine, seed_from_dmklinger
 from app.elo import expected_score, update_elo
 from app.game_service import GameService, generate_room_code
 from app.scoring import LLMScorer, ScoreResult
@@ -21,7 +21,7 @@ def isolated_db(tmp_path: Path):
     reset_database_engine(test_url)
 
     init_db()
-    seed_sample_words_if_empty()
+    seed_from_dmklinger()
 
     try:
         yield

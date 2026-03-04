@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import logging
-import os
 from pathlib import Path
 import sqlite3
 from typing import Iterator
@@ -116,61 +115,8 @@ def init_db() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CSV Dictionary Seeder — auto-detects format
+# Dictionary Seeder — dmklinger/ukrainian
 # ---------------------------------------------------------------------------
-
-def _find_csv_path() -> str | None:
-    """Locate the best dictionary CSV, preferring dmklinger data."""
-    candidates = [
-        # dmklinger/ukrainian dictionary — highest priority
-        Path(__file__).parent / "seeds" / "dmklinger_processed.csv",
-        # Legacy Oxford data — fallback only
-        Path(__file__).parent / "seeds" / "oxford_enriched.csv",
-        Path(__file__).parent / "seeds" / "oxford_processed.csv",
-        # Legacy dictionary_clean.csv — last resort
-        Path(__file__).parent / "data" / "processed" / "dictionary_clean.csv",
-        Path(__file__).parent / "seeds" / "dictionary_clean.csv",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return str(candidate)
-    return None
-
-
-def _detect_csv_format(csv_path: str) -> str:
-    """Detect the CSV format by inspecting the first line.
-
-    Returns:
-        "header4"  — has header row with 4 columns (dictionary_clean.csv)
-        "header3"  — has header row with 3 columns
-        "format1"  — no header, 3 cols, last col is CEFR level (sample words)
-        "format2"  — no header, 4 cols (ua, en, pos, source)
-    """
-    with open(csv_path, encoding="utf-8-sig") as f:
-        first_line = f.readline().strip()
-
-    if not first_line:
-        return "format1"
-
-    cols = first_line.split(",")
-
-    # Check if the first line looks like a header row
-    first_lower = [c.strip().lower() for c in cols]
-    header_keywords = {"ua_word", "en_word", "word", "source", "part_of_speech", "pos", "level", "ua", "en"}
-    if any(kw in header_keywords for kw in first_lower):
-        if len(cols) >= 4:
-            return "header4"
-        return "header3"
-
-    # No header — detect by content
-    if len(cols) == 3 and cols[2].strip().upper() in CEFR_LEVELS:
-        return "format1"
-
-    if len(cols) >= 4:
-        return "format2"
-
-    return "format1"
-
 
 def _expand_pos(raw: str) -> str:
     """Expand part-of-speech abbreviation to full word."""
@@ -178,96 +124,74 @@ def _expand_pos(raw: str) -> str:
     return POS_MAP.get(cleaned, cleaned)
 
 
-def seed_from_csv(force: bool = False) -> int:
-    """Seed the words + dictionary_entries tables from dictionary_clean.csv.
+def _make_word_id(en: str) -> str:
+    """Create a stable unique word id from the English text."""
+    slug = en.lower().replace(" ", "_").replace("'", "")
+    if len(slug) > 56:
+        slug = slug[:52] + hashlib.md5(en.encode()).hexdigest()[:4]
+    return slug[:64]
 
-    Auto-detects CSV format (with/without headers, 3 or 4 columns).
+
+def seed_from_dmklinger(force: bool = False) -> int:
+    """Seed the words + dictionary_entries tables from dmklinger_processed.csv.
+
     Returns the number of unique words inserted into the words table.
-    Idempotent: uses ON CONFLICT DO NOTHING / INSERT OR IGNORE.
+    Idempotent: uses ON CONFLICT upsert.
     """
-    csv_path = _find_csv_path()
+    csv_path = Path(__file__).parent / "seeds" / "dmklinger_processed.csv"
 
-    if not csv_path:
-        logger.warning("No dictionary CSV found — searched common paths")
-        return 0
+    if not csv_path.exists():
+        logger.warning("dmklinger_processed.csv not found — seeding sample words only")
+        return _seed_sample_words(force)
 
-    is_oxford = "oxford_processed" in csv_path or "oxford_enriched" in csv_path
-    is_dmklinger = "dmklinger" in csv_path
-    logger.info("Found CSV at: %s (dmklinger=%s, oxford=%s)", csv_path, is_dmklinger, is_oxford)
+    logger.info("Using dictionary source: %s", csv_path)
 
     with get_db() as session:
         existing_count = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
-        if existing_count > 50 and not force:
+        if existing_count > 100 and not force:
             logger.info("Dictionary already seeded with %d words, skipping", existing_count)
             return 0
 
     if force:
         logger.info("Force reseed — clearing words and dictionary_entries tables")
         with get_db() as session:
-            session.execute(text("DELETE FROM words"))
             session.execute(text("DELETE FROM dictionary_entries"))
-
-    fmt = _detect_csv_format(csv_path)
-    logger.info("CSV format detected: %s", fmt)
+            session.execute(text("DELETE FROM words"))
 
     is_sqlite = settings.database_url.startswith("sqlite")
 
-    # For Oxford/dmklinger data, use upsert (DO UPDATE) so reseeds update existing rows.
-    # For legacy CSV, use DO NOTHING to be safe.
-    if is_oxford or is_dmklinger:
-        word_sql = (
-            "INSERT INTO words (id, ua, en, level, definition, example) "
-            "VALUES (:id, :ua, :en, :level, :definition, :example) "
-            "ON CONFLICT (id) DO UPDATE SET ua = :ua, en = :en, level = :level, "
-            "definition = :definition, example = :example"
-            if not is_sqlite
-            else "INSERT OR REPLACE INTO words (id, ua, en, level, definition, example) "
-            "VALUES (:id, :ua, :en, :level, :definition, :example)"
-        )
-    else:
-        word_sql = (
-            "INSERT OR IGNORE INTO words (id, ua, en, level, definition, example) "
-            "VALUES (:id, :ua, :en, :level, :definition, :example)"
-            if is_sqlite
-            else "INSERT INTO words (id, ua, en, level, definition, example) "
-            "VALUES (:id, :ua, :en, :level, :definition, :example) ON CONFLICT (id) DO NOTHING"
-        )
+    word_sql = (
+        "INSERT OR REPLACE INTO words (id, ua, en, level, definition, example) "
+        "VALUES (:id, :ua, :en, :level, :definition, :example)"
+        if is_sqlite
+        else "INSERT INTO words (id, ua, en, level, definition, example) "
+        "VALUES (:id, :ua, :en, :level, :definition, :example) "
+        "ON CONFLICT (id) DO UPDATE SET ua = :ua, en = :en, level = :level, "
+        "definition = :definition, example = :example"
+    )
 
-    if is_oxford or is_dmklinger:
-        dict_sql = (
-            "INSERT INTO dictionary_entries (ua_word, en_word, part_of_speech, source, definition, example, created_at) "
-            "VALUES (:ua_word, :en_word, :part_of_speech, :source, :definition, :example, :created_at) "
-            "ON CONFLICT (ua_word, en_word) DO UPDATE SET "
-            "definition = :definition, example = :example, source = :source"
-            if not is_sqlite
-            else "INSERT OR REPLACE INTO dictionary_entries "
-            "(ua_word, en_word, part_of_speech, source, definition, example, created_at) "
-            "VALUES (:ua_word, :en_word, :part_of_speech, :source, :definition, :example, :created_at)"
-        )
-    else:
-        dict_sql = (
-            "INSERT OR IGNORE INTO dictionary_entries "
-            "(ua_word, en_word, part_of_speech, source, definition, example, created_at) "
-            "VALUES (:ua_word, :en_word, :part_of_speech, :source, :definition, :example, :created_at)"
-            if is_sqlite
-            else "INSERT INTO dictionary_entries "
-            "(ua_word, en_word, part_of_speech, source, definition, example, created_at) "
-            "VALUES (:ua_word, :en_word, :part_of_speech, :source, :definition, :example, :created_at) "
-            "ON CONFLICT (ua_word, en_word) DO NOTHING"
-        )
+    dict_sql = (
+        "INSERT OR REPLACE INTO dictionary_entries "
+        "(ua_word, en_word, part_of_speech, source, definition, example, created_at) "
+        "VALUES (:ua_word, :en_word, :part_of_speech, :source, :definition, :example, :created_at)"
+        if is_sqlite
+        else "INSERT INTO dictionary_entries (ua_word, en_word, part_of_speech, source, definition, example, created_at) "
+        "VALUES (:ua_word, :en_word, :part_of_speech, :source, :definition, :example, :created_at) "
+        "ON CONFLICT (ua_word, en_word) DO UPDATE SET "
+        "definition = :definition, example = :example, source = :source"
+    )
 
     inserted_words = 0
     inserted_dict = 0
     seen_word_ids: set[str] = set()
     batch_words: list[dict] = []
     batch_dict: list[dict] = []
-    BATCH_SIZE = 5000 if not is_sqlite else 500
+    BATCH_SIZE = 500 if is_sqlite else 5000
     rows_processed = 0
 
     def flush(session: Session) -> tuple[int, int]:
         nonlocal batch_words, batch_dict
-        w = 0
-        d = 0
+        w = d = 0
         if batch_words:
             session.execute(text(word_sql), batch_words)
             w = len(batch_words)
@@ -279,189 +203,68 @@ def seed_from_csv(force: bool = False) -> int:
         session.commit()
         return w, d
 
-    def _make_word_id(en: str) -> str:
-        """Create a stable unique word id from the English text."""
-        slug = en.lower().replace(" ", "_").replace("'", "")
-        if len(slug) > 56:
-            slug = slug[:52] + hashlib.md5(en.encode()).hexdigest()[:4]
-        return slug[:64]
-
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
-        if fmt in ("header4", "header3"):
-            # Has a header row — use DictReader
-            reader = csv.DictReader(f)
-            headers = reader.fieldnames or []
-            logger.info("CSV columns detected: %s", headers)
+        reader = csv.DictReader(f)
 
-            # Auto-detect column names
-            def _find_col(candidates: list[str]) -> str | None:
-                for c in candidates:
-                    for h in headers:
-                        if h.strip().lower() == c.lower():
-                            return h
-                return None
+        with get_db() as session:
+            for row in reader:
+                ua = (row.get("ua_word") or "").strip()
+                en = (row.get("en_word") or "").strip()
+                pos = _expand_pos((row.get("part_of_speech") or "").strip())
+                level = (row.get("level") or "B1").strip().upper()
+                definition = (row.get("definition") or "").strip()
+                example = (row.get("example") or "").strip()
 
-            ua_col = _find_col(["ua_word", "ua", "ukrainian", "word_ua", "uk", "ukr"])
-            en_col = _find_col(["en_word", "en", "english", "word_en", "word"])
-            pos_col = _find_col(["part_of_speech", "pos", "type", "word_type"])
-            level_col = _find_col(["level", "cefr", "cefr_level", "difficulty"])
-            source_col = _find_col(["source", "def_source"])
-            def_col = _find_col(["definition", "def"])
-            example_col = _find_col(["example", "sentence"])
+                if not ua or not en:
+                    continue
+                if level not in CEFR_LEVELS:
+                    level = "B1"
+                if len(en) > 60 or len(ua) > 100:
+                    continue
 
-            logger.info("Mapped columns — ua:%s en:%s pos:%s level:%s source:%s def:%s example:%s",
-                        ua_col, en_col, pos_col, level_col, source_col, def_col, example_col)
+                batch_dict.append({
+                    "ua_word": ua.lower(),
+                    "en_word": en.lower(),
+                    "part_of_speech": pos or None,
+                    "source": "dmklinger",
+                    "definition": definition,
+                    "example": example,
+                    "created_at": _utc_now(),
+                })
 
-            if not ua_col or not en_col:
-                logger.error("Cannot find ua/en columns in CSV. Headers: %s", headers)
-                return 0
-
-            with get_db() as session:
-                for row in reader:
-                    ua = (row.get(ua_col) or "").strip()
-                    en = (row.get(en_col) or "").strip()
-                    pos_raw = (row.get(pos_col) or "").strip() if pos_col else ""
-                    pos = _expand_pos(pos_raw)
-                    level = (row.get(level_col) or "B1").strip().upper() if level_col else "B1"
-                    source = (row.get(source_col) or ("dmklinger" if is_dmklinger else "oxford" if is_oxford else "csv")).strip() if source_col else ("dmklinger" if is_dmklinger else "oxford" if is_oxford else "csv")
-                    definition = (row.get(def_col) or "").strip() if def_col else ""
-                    example = (row.get(example_col) or "").strip() if example_col else ""
-
-                    if not ua or not en:
-                        continue
-                    if level not in CEFR_LEVELS:
-                        level = "B1"
-                    # Skip very long entries (definitions, not words)
-                    if len(en) > 60 or len(ua) > 100:
-                        continue
-
-                    # dictionary_entries — all rows
-                    batch_dict.append({
-                        "ua_word": ua.lower(),
-                        "en_word": en.lower(),
-                        "part_of_speech": pos or None,
-                        "source": source.lower(),
+                word_id = _make_word_id(en)
+                if word_id and word_id not in seen_word_ids:
+                    seen_word_ids.add(word_id)
+                    batch_words.append({
+                        "id": word_id,
+                        "ua": ua,
+                        "en": en,
+                        "level": level,
                         "definition": definition,
                         "example": example,
-                        "created_at": _utc_now(),
                     })
 
-                    # words table — unique en words
-                    word_id = _make_word_id(en)
-                    if word_id and word_id not in seen_word_ids:
-                        seen_word_ids.add(word_id)
-                        batch_words.append({
-                            "id": word_id,
-                            "ua": ua,
-                            "en": en,
-                            "level": level,
-                            "definition": definition,
-                            "example": example,
-                        })
+                rows_processed += 1
+                if len(batch_dict) >= BATCH_SIZE:
+                    w, d = flush(session)
+                    inserted_words += w
+                    inserted_dict += d
+                    if rows_processed % 10000 == 0:
+                        logger.info("Seeding progress: %d rows processed", rows_processed)
 
-                    rows_processed += 1
-                    if len(batch_dict) >= BATCH_SIZE:
-                        w, d = flush(session)
-                        inserted_words += w
-                        inserted_dict += d
-                        if rows_processed % 50000 == 0:
-                            logger.info("Seeding progress: %d rows processed", rows_processed)
+            w, d = flush(session)
+            inserted_words += w
+            inserted_dict += d
 
-                # Final flush
-                w, d = flush(session)
-                inserted_words += w
-                inserted_dict += d
-
-        else:
-            # No header — read as raw CSV
-            reader = csv.reader(f)
-
-            with get_db() as session:
-                for cols in reader:
-                    if not cols or len(cols) < 2:
-                        continue
-
-                    if fmt == "format1":
-                        # 3 columns: ua, en, level
-                        ua = cols[0].strip()
-                        en = cols[1].strip()
-                        level_raw = cols[2].strip().upper() if len(cols) > 2 else "B1"
-                        level = level_raw if level_raw in CEFR_LEVELS else "B1"
-                        pos = ""
-                        source = "sample"
-                    else:
-                        # format2: ua, en, pos, source
-                        ua = cols[0].strip()
-                        en = cols[1].strip()
-                        pos_raw = cols[2].strip() if len(cols) > 2 else ""
-                        pos = _expand_pos(pos_raw)
-                        source = cols[3].strip() if len(cols) > 3 else "csv"
-                        level = "B1"
-
-                    if not ua or not en:
-                        continue
-                    if len(en) > 60 or len(ua) > 100:
-                        continue
-
-                    batch_dict.append({
-                        "ua_word": ua.lower(),
-                        "en_word": en.lower(),
-                        "part_of_speech": pos or None,
-                        "source": source.lower(),
-                        "definition": "",
-                        "example": "",
-                        "created_at": _utc_now(),
-                    })
-
-                    word_id = _make_word_id(en)
-                    if word_id and word_id not in seen_word_ids:
-                        seen_word_ids.add(word_id)
-                        batch_words.append({
-                            "id": word_id,
-                            "ua": ua,
-                            "en": en,
-                            "level": level,
-                            "definition": "",
-                            "example": "",
-                        })
-
-                    rows_processed += 1
-                    if len(batch_dict) >= BATCH_SIZE:
-                        w, d = flush(session)
-                        inserted_words += w
-                        inserted_dict += d
-                        if rows_processed % 50000 == 0:
-                            logger.info("Seeding progress: %d rows processed", rows_processed)
-
-                w, d = flush(session)
-                inserted_words += w
-                inserted_dict += d
-
-    source_label = "dmklinger" if is_dmklinger else ("Oxford 5000" if is_oxford else "CSV")
     logger.info(
-        "%s seed complete: %d unique words, %d dictionary entries from %d rows",
-        source_label,
-        inserted_words,
-        inserted_dict,
-        rows_processed,
+        "dmklinger seed complete: %d unique words, %d dictionary entries from %d rows",
+        inserted_words, inserted_dict, rows_processed,
     )
     return inserted_words
 
 
-def seed_sample_words_if_empty() -> int:
-    """Seed from CSV first; fall back to hardcoded sample words only if CSV is unavailable."""
-    force = os.environ.get("FORCE_RESEED", "0") == "1"
-    csv_count = seed_from_csv(force=force)
-    if csv_count > 0:
-        return csv_count
-
-    # Check if words table already has data (e.g. from previous CSV seed)
-    with get_db() as session:
-        existing = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
-        if existing > 0:
-            return 0
-
-    # Hardcoded fallback — only used when CSV is not available
+def _seed_sample_words(force: bool = False) -> int:
+    """Fallback: seed a small set of sample words when no CSV is available."""
     sample_words = [
         ("привіт", "hello", "A1"), ("так", "yes", "A1"), ("ні", "no", "A1"),
         ("дякую", "thank you", "A1"), ("будь ласка", "please", "A1"),
@@ -474,25 +277,11 @@ def seed_sample_words_if_empty() -> int:
         ("поганий", "bad", "A1"), ("їжа", "food", "A1"), ("школа", "school", "A1"),
         ("друг", "friend", "A1"), ("ім'я", "name", "A1"), ("місто", "city", "A1"),
         ("країна", "country", "A1"),
-        ("добрий ранок", "good morning", "A2"), ("сім'я", "family", "A2"),
-        ("книга", "book", "A2"), ("стіл", "table", "A2"), ("машина", "car", "A2"),
-        ("любов", "love", "A2"), ("час", "time", "A2"), ("робота", "work", "A2"),
-        ("незважаючи на", "despite", "B1"), ("однак", "however", "B1"),
-        ("отже", "therefore", "B1"), ("досвід", "experience", "B1"),
-        ("суспільство", "society", "B1"), ("уряд", "government", "B1"),
-        ("освіта", "education", "B1"), ("наука", "science", "B1"),
-        ("впливати", "influence", "B2"), ("забезпечувати", "provide", "B2"),
-        ("розглядати", "consider", "B2"), ("дослідження", "research", "B2"),
-        ("значний", "significant", "B2"), ("стратегія", "strategy", "B2"),
-        ("відшкодування", "compensation", "C1"), ("передумова", "prerequisite", "C1"),
-        ("двозначність", "ambiguity", "C1"), ("парадокс", "paradox", "C1"),
-        ("безпрецедентний", "unprecedented", "C2"), ("квінтесенція", "quintessence", "C2"),
-        ("дихотомія", "dichotomy", "C2"), ("фундаментальний", "fundamental", "C2"),
     ]
 
     with get_db() as session:
-        count = session.execute(text("SELECT COUNT(*) FROM words")).scalar_one()
-        if count > 0:
+        existing = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
+        if existing > 0 and not force:
             return 0
 
         session.execute(
@@ -505,6 +294,7 @@ def seed_sample_words_if_empty() -> int:
             ],
         )
 
+    logger.info("Seeded %d sample words (no CSV found)", len(sample_words))
     return len(sample_words)
 
 

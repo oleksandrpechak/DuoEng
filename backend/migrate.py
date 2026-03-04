@@ -5,7 +5,7 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 
-from app.db import check_db_connection, seed_sample_words_if_empty
+from app.db import check_db_connection, seed_from_dmklinger
 
 
 def run_migrations() -> None:
@@ -17,5 +17,5 @@ def run_migrations() -> None:
 if __name__ == "__main__":
     run_migrations()
     check_db_connection()
-    seeded = seed_sample_words_if_empty()
+    seeded = seed_from_dmklinger()
     print(f"Migrations complete. Seeded words: {seeded}")

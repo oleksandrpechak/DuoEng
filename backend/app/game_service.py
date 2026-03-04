@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .db import get_db, seed_sample_words_if_empty
+from .db import get_db, seed_from_dmklinger
 from .elo import expected_score, update_elo
 from .rate_limit import SlidingWindowLimiter, ViolationTracker
 from .scoring import LLMScorer
@@ -1322,7 +1322,7 @@ class GameService:
 
         seeded = 0
         if seed_words:
-            seeded = seed_sample_words_if_empty()
+            seeded = seed_from_dmklinger()
 
         if reset_stats:
             with get_db() as session:
