@@ -120,20 +120,16 @@ def init_db() -> None:
 # ---------------------------------------------------------------------------
 
 def _find_csv_path() -> str | None:
-    """Locate the best dictionary CSV, preferring Oxford enriched/processed data."""
+    """Locate the best dictionary CSV, preferring dmklinger data."""
     candidates = [
-        # Oxford enriched (with copyright-free definitions) — highest priority
+        # dmklinger/ukrainian dictionary — highest priority
+        Path(__file__).parent / "seeds" / "dmklinger_processed.csv",
+        # Legacy Oxford data — fallback only
         Path(__file__).parent / "seeds" / "oxford_enriched.csv",
-        Path(__file__).parent.parent / "seeds" / "oxford_enriched.csv",
-        # Oxford 5000 processed data (translations only) — second priority
         Path(__file__).parent / "seeds" / "oxford_processed.csv",
-        Path(__file__).parent.parent / "seeds" / "oxford_processed.csv",
-        # Legacy dictionary_clean.csv — fallback only
+        # Legacy dictionary_clean.csv — last resort
         Path(__file__).parent / "data" / "processed" / "dictionary_clean.csv",
         Path(__file__).parent / "seeds" / "dictionary_clean.csv",
-        Path(__file__).parent / "dictionary_clean.csv",
-        Path(__file__).parent.parent / "data" / "processed" / "dictionary_clean.csv",
-        Path(__file__).parent / "data" / "dictionary_clean.csv",
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -196,7 +192,8 @@ def seed_from_csv(force: bool = False) -> int:
         return 0
 
     is_oxford = "oxford_processed" in csv_path or "oxford_enriched" in csv_path
-    logger.info("Found CSV at: %s (oxford=%s)", csv_path, is_oxford)
+    is_dmklinger = "dmklinger" in csv_path
+    logger.info("Found CSV at: %s (dmklinger=%s, oxford=%s)", csv_path, is_dmklinger, is_oxford)
 
     with get_db() as session:
         existing_count = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
@@ -215,9 +212,9 @@ def seed_from_csv(force: bool = False) -> int:
 
     is_sqlite = settings.database_url.startswith("sqlite")
 
-    # For Oxford data, use upsert (DO UPDATE) so reseeds update existing rows.
+    # For Oxford/dmklinger data, use upsert (DO UPDATE) so reseeds update existing rows.
     # For legacy CSV, use DO NOTHING to be safe.
-    if is_oxford:
+    if is_oxford or is_dmklinger:
         word_sql = (
             "INSERT INTO words (id, ua, en, level, definition, example) "
             "VALUES (:id, :ua, :en, :level, :definition, :example) "
@@ -236,7 +233,7 @@ def seed_from_csv(force: bool = False) -> int:
             "VALUES (:id, :ua, :en, :level, :definition, :example) ON CONFLICT (id) DO NOTHING"
         )
 
-    if is_oxford:
+    if is_oxford or is_dmklinger:
         dict_sql = (
             "INSERT INTO dictionary_entries (ua_word, en_word, part_of_speech, source, definition, example, created_at) "
             "VALUES (:ua_word, :en_word, :part_of_speech, :source, :definition, :example, :created_at) "
@@ -326,7 +323,7 @@ def seed_from_csv(force: bool = False) -> int:
                     pos_raw = (row.get(pos_col) or "").strip() if pos_col else ""
                     pos = _expand_pos(pos_raw)
                     level = (row.get(level_col) or "B1").strip().upper() if level_col else "B1"
-                    source = (row.get(source_col) or ("oxford" if is_oxford else "csv")).strip() if source_col else ("oxford" if is_oxford else "csv")
+                    source = (row.get(source_col) or ("dmklinger" if is_dmklinger else "oxford" if is_oxford else "csv")).strip() if source_col else ("dmklinger" if is_dmklinger else "oxford" if is_oxford else "csv")
                     definition = (row.get(def_col) or "").strip() if def_col else ""
                     example = (row.get(example_col) or "").strip() if example_col else ""
 
@@ -440,7 +437,7 @@ def seed_from_csv(force: bool = False) -> int:
                 inserted_words += w
                 inserted_dict += d
 
-    source_label = "Oxford 5000" if is_oxford else "CSV"
+    source_label = "dmklinger" if is_dmklinger else ("Oxford 5000" if is_oxford else "CSV")
     logger.info(
         "%s seed complete: %d unique words, %d dictionary entries from %d rows",
         source_label,
