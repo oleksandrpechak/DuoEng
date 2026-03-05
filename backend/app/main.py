@@ -87,28 +87,67 @@ async def startup_event() -> None:
     except Exception:
         logger.warning("Could not create AI players at startup")
 
-    # Run seeding in a background thread so the server can bind the port
-    # immediately.  Render (and similar PaaS) will kill the process if no
-    # open port is detected within ~5 minutes.
-    def _background_seed():
-        try:
-            force = os.environ.get("FORCE_RESEED", "0") == "1"
-            seeded = seed_from_dmklinger(force=force)
+    # Check if words table is empty — if so, seed synchronously before
+    # accepting requests.  Otherwise, background-seed for updates only.
+    force = os.environ.get("FORCE_RESEED", "0") == "1"
+    words_empty = True
+    try:
+        with get_db() as session:
+            word_count = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
+            words_empty = word_count == 0
+    except Exception:
+        logger.warning("Could not check word count at startup")
 
-            # Log word count after seeding for diagnostics
+    if words_empty or force:
+        # Seed synchronously to ensure words are available before any game
+        logger.info("Words table is empty — seeding synchronously before accepting requests...")
+        try:
+            seed_from_dmklinger(force=force)
             with get_db() as session:
                 word_count = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
                 dict_count = session.execute(text("SELECT COUNT(*) FROM dictionary_entries")).scalar() or 0
-
             if word_count == 0:
-                logger.critical("No words in database after seeding! Game will not work.")
+                logger.critical("No words in database after synchronous seeding! Game will not work.")
+            else:
+                logger.info(
+                    "Synchronous seed complete: %d words, %d dictionary_entries available",
+                    word_count, dict_count,
+                )
+            _stats_cache["data"] = None
+            _stats_cache["expires_at"] = 0.0
+        except Exception:
+            logger.exception("Synchronous seeding failed — game may not work until background seed completes")
+    else:
+        logger.info("Words table already has %d words, skipping synchronous seed", word_count)
+
+    # Also run a background thread for any update/re-check
+    def _background_seed():
+        try:
+            if not words_empty and not force:
+                # Already seeded, just verify and log
+                with get_db() as session:
+                    wc = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
+                    dc = session.execute(text("SELECT COUNT(*) FROM dictionary_entries")).scalar() or 0
+                logger.info(
+                    "Background check: %d words, %d dictionary_entries available for games",
+                    wc, dc,
+                )
+                return
+
+            seeded = seed_from_dmklinger(force=False)
+
+            with get_db() as session:
+                wc = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
+                dc = session.execute(text("SELECT COUNT(*) FROM dictionary_entries")).scalar() or 0
+
+            if wc == 0:
+                logger.critical("No words in database after background seeding!")
             else:
                 logger.info(
                     "Ready: %d words, %d dictionary_entries available for games",
-                    word_count, dict_count,
+                    wc, dc,
                 )
 
-            # Invalidate the stats cache so the next /api/stats call returns fresh data
             _stats_cache["data"] = None
             _stats_cache["expires_at"] = 0.0
 
@@ -531,6 +570,25 @@ async def api_healthcheck() -> dict[str, str]:
     with get_db() as session:
         session.execute(text("SELECT 1"))
     return {"status": "ok", "ts": datetime.now(timezone.utc).isoformat()}
+
+
+@api_router.get("/health/words")
+async def api_health_words() -> dict:
+    """Diagnostic endpoint: check how many words are available for games."""
+    with get_db() as session:
+        word_count = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
+        dict_count = session.execute(text("SELECT COUNT(*) FROM dictionary_entries")).scalar() or 0
+        level_rows = session.execute(
+            text("SELECT level, COUNT(*) as cnt FROM words GROUP BY level ORDER BY level")
+        ).mappings().all()
+    words_by_level = {row["level"]: row["cnt"] for row in level_rows}
+    return {
+        "words": word_count,
+        "dictionary_entries": dict_count,
+        "words_by_level": words_by_level,
+        "game_ready": word_count > 0 or dict_count > 0,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 # ---------------------------------------------------------------------------

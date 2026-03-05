@@ -106,8 +106,13 @@ def get_db() -> Iterator[Session]:
 
 
 def check_db_connection() -> None:
-    with _ENGINE.connect() as connection:
-        connection.execute(text("SELECT 1"))
+    try:
+        with _ENGINE.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        logger.info("Database connection check passed")
+    except Exception as exc:
+        logger.error("Database connection check failed: %s", exc)
+        raise
 
 
 def init_db() -> None:

@@ -325,7 +325,30 @@ class GameService:
                 "SELECT ua_word AS ua, en_word AS en FROM dictionary_entries ORDER BY RANDOM() LIMIT 1",
             )
         if not row:
-            raise HTTPException(status_code=500, detail="No words available")
+            # Emergency: both tables empty — trigger synchronous seed right now
+            logger.critical(
+                "Both words and dictionary_entries tables are empty! Triggering emergency seed.",
+                extra={"event": "emergency_seed"},
+            )
+            try:
+                seed_from_dmklinger(force=False)
+                # After seeding, retry the query
+                row = self._one(
+                    session,
+                    "SELECT ua, en FROM words WHERE level = :level ORDER BY RANDOM() LIMIT 1",
+                    {"level": word_level},
+                )
+                if not row:
+                    row = self._one(session, "SELECT ua, en FROM words ORDER BY RANDOM() LIMIT 1")
+                if not row:
+                    row = self._one(
+                        session,
+                        "SELECT ua_word AS ua, en_word AS en FROM dictionary_entries ORDER BY RANDOM() LIMIT 1",
+                    )
+            except Exception:
+                logger.exception("Emergency seed failed")
+        if not row:
+            raise HTTPException(status_code=500, detail="No words available — database seeding may have failed. Please restart the server.")
         return row
 
     def _elapsed_seconds(self, room: Mapping[str, Any]) -> float:
