@@ -177,7 +177,7 @@ settings = Settings(
     env=os.getenv("ENV", "development"),
     secret_key=os.getenv("SECRET_KEY", _DEFAULT_SECRET_KEY),
     jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
-    jwt_exp_minutes=_as_int(os.getenv("JWT_EXP_MINUTES"), 60 * 12),
+    jwt_exp_minutes=_as_int(os.getenv("JWT_EXP_MINUTES"), 60 * 24 * 7),
     port=_as_int(os.getenv("PORT"), 8000),
     database_url=_normalize_database_url(
         os.getenv("DATABASE_URL"),

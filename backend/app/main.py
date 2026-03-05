@@ -94,6 +94,24 @@ async def startup_event() -> None:
         try:
             force = os.environ.get("FORCE_RESEED", "0") == "1"
             seeded = seed_from_dmklinger(force=force)
+
+            # Log word count after seeding for diagnostics
+            with get_db() as session:
+                word_count = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
+                dict_count = session.execute(text("SELECT COUNT(*) FROM dictionary_entries")).scalar() or 0
+
+            if word_count == 0:
+                logger.critical("No words in database after seeding! Game will not work.")
+            else:
+                logger.info(
+                    "Ready: %d words, %d dictionary_entries available for games",
+                    word_count, dict_count,
+                )
+
+            # Invalidate the stats cache so the next /api/stats call returns fresh data
+            _stats_cache["data"] = None
+            _stats_cache["expires_at"] = 0.0
+
             logger.info(
                 "Background seed complete",
                 extra={"event": "seed_done", "seeded_words": seeded},

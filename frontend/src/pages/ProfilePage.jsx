@@ -251,25 +251,27 @@ export default function ProfilePage() {
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
           </div>
         ) : stats ? (
-          <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
-            <Card className="rounded-2xl border-0 shadow-soft">
-              <CardContent className="p-4 text-center">
-                <p className="text-xs text-muted-foreground mb-1">Wins</p>
-                <p className="font-heading text-2xl font-bold text-accent-foreground">{stats.wins}</p>
-              </CardContent>
-            </Card>
-            <Card className="rounded-2xl border-0 shadow-soft">
-              <CardContent className="p-4 text-center">
-                <p className="text-xs text-muted-foreground mb-1">Losses</p>
-                <p className="font-heading text-2xl font-bold text-destructive">{stats.losses}</p>
-              </CardContent>
-            </Card>
-            <Card className="rounded-2xl border-0 shadow-soft">
-              <CardContent className="p-4 text-center">
-                <p className="text-xs text-muted-foreground mb-1">Games</p>
-                <p className="font-heading text-2xl font-bold">{stats.total_games}</p>
-              </CardContent>
-            </Card>
+          <div className="flex justify-center w-full">
+            <div className="grid grid-cols-3 gap-3 w-full max-w-sm">
+              <Card className="rounded-2xl border-0 shadow-soft">
+                <CardContent className="p-4 text-center">
+                  <p className="text-xs text-muted-foreground mb-1">Wins</p>
+                  <p className="font-heading text-2xl font-bold text-accent-foreground">{stats.wins}</p>
+                </CardContent>
+              </Card>
+              <Card className="rounded-2xl border-0 shadow-soft">
+                <CardContent className="p-4 text-center">
+                  <p className="text-xs text-muted-foreground mb-1">Losses</p>
+                  <p className="font-heading text-2xl font-bold text-destructive">{stats.losses}</p>
+                </CardContent>
+              </Card>
+              <Card className="rounded-2xl border-0 shadow-soft">
+                <CardContent className="p-4 text-center">
+                  <p className="text-xs text-muted-foreground mb-1">Games</p>
+                  <p className="font-heading text-2xl font-bold">{stats.total_games}</p>
+                </CardContent>
+              </Card>
+            </div>
           </div>
         ) : null}
 
@@ -313,7 +315,7 @@ export default function ProfilePage() {
             <Button
               variant="outline"
               className="rounded-2xl h-12 text-sm font-medium flex items-center gap-2"
-              onClick={() => navigate("/?tab=history")}
+              onClick={() => navigate("/history")}
             >
               <History className="w-4 h-4" />
               History
@@ -321,7 +323,7 @@ export default function ProfilePage() {
             <Button
               variant="outline"
               className="rounded-2xl h-12 text-sm font-medium flex items-center gap-2"
-              onClick={() => navigate("/?tab=dictionary")}
+              onClick={() => navigate("/dictionary")}
             >
               <BookOpen className="w-4 h-4" />
               Dictionary
@@ -331,7 +333,7 @@ export default function ProfilePage() {
           <Button
             variant="outline"
             className="w-full rounded-2xl h-12 text-sm font-medium flex items-center justify-center gap-2"
-            onClick={() => navigate("/?tab=leaderboard")}
+            onClick={() => navigate("/leaderboard")}
           >
             <BarChart3 className="w-4 h-4" />
             Leaderboard

@@ -315,6 +315,16 @@ class GameService:
             # Last resort: any word at all
             row = self._one(session, "SELECT ua, en FROM words ORDER BY RANDOM() LIMIT 1")
         if not row:
+            # Final fallback: try dictionary_entries table (seeding may still be in progress)
+            logger.warning(
+                "words table empty, falling back to dictionary_entries",
+                extra={"event": "word_fallback_dict_entries"},
+            )
+            row = self._one(
+                session,
+                "SELECT ua_word AS ua, en_word AS en FROM dictionary_entries ORDER BY RANDOM() LIMIT 1",
+            )
+        if not row:
             raise HTTPException(status_code=500, detail="No words available")
         return row
 

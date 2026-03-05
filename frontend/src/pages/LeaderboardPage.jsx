@@ -75,7 +75,7 @@ export default function LeaderboardPage() {
         </div>
 
         {/* Period tabs */}
-        <div className="flex gap-1 p-1 bg-muted rounded-full max-w-sm mb-6">
+        <div className="flex gap-1 p-1 bg-muted rounded-full max-w-sm mx-auto mb-6">
           {PERIODS.map((p) => (
             <button
               key={p.value}

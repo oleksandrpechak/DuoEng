@@ -42,4 +42,26 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Handle 401 (expired / invalid token) globally — clear auth and redirect
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response && error.response.status === 401) {
+      const detail = error.response.data?.detail || "";
+      if (detail === "Token expired" || detail === "Invalid token" || detail === "Player not found") {
+        sessionStorage.removeItem("accessToken");
+        sessionStorage.removeItem("userId");
+        sessionStorage.removeItem("nickname");
+        sessionStorage.removeItem("authType");
+        sessionStorage.removeItem("duoeng_platform_stats");
+        // Redirect to landing page to re-authenticate
+        if (window.location.pathname !== "/") {
+          window.location.href = "/";
+        }
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 export default api;
