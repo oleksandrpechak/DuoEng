@@ -50,6 +50,10 @@ def _normalize_database_url(value: str | None, fallback: str) -> str:
         "postgresql+psycopg2",
     }:
         url = f"postgresql+psycopg2://{suffix}"
+        # Strip pgbouncer param — Supabase pooler uses it but psycopg2 rejects it.
+        url = url.replace("pgbouncer=true&", "").replace("&pgbouncer=true", "").replace("?pgbouncer=true", "?")
+        if url.endswith("?"):
+            url = url[:-1]
         # Append sslmode=require for encrypted DB connections (production safety).
         if "sslmode" not in url:
             separator = "&" if "?" in url else "?"

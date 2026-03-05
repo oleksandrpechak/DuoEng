@@ -27,7 +27,12 @@ if scheme in {
     "postgresql+pg8000",
     "postgresql+psycopg2",
 }:
-    print(f"postgresql+psycopg2://{suffix}")
+    url = f"postgresql+psycopg2://{suffix}"
+    # Strip pgbouncer param — Supabase pooler uses it but psycopg2 rejects it.
+    url = url.replace("pgbouncer=true&", "").replace("&pgbouncer=true", "").replace("?pgbouncer=true", "?")
+    if url.endswith("?"):
+        url = url[:-1]
+    print(url)
     raise SystemExit(0)
 
 if scheme == "sqlite":
