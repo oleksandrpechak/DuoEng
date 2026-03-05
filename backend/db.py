@@ -195,7 +195,7 @@ def seed_from_dmklinger(force: bool = False) -> int:
     seen_word_ids: set[str] = set()
     batch_words: list[dict] = []
     batch_dict: list[dict] = []
-    BATCH_SIZE = 500 if is_sqlite else 5000
+    BATCH_SIZE = 50
     rows_processed = 0
 
     def flush(session: Session) -> tuple[int, int]:
