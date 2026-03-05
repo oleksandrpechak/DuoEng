@@ -396,24 +396,29 @@ export default function ProfilePage() {
                   {favourites.map((fav) => (
                     <div
                       key={fav.word_id}
-                      className="flex items-center justify-between rounded-xl bg-muted px-3 py-2 text-sm"
+                      className="flex flex-col rounded-xl bg-muted px-3 py-2 text-sm gap-1"
                     >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Star className="w-4 h-4 text-yellow-500 fill-yellow-500 flex-shrink-0" />
-                        <span className="font-medium truncate">{fav.ua}</span>
-                        <span className="text-muted-foreground">→</span>
-                        <span className="truncate">{fav.en}</span>
-                        <CefrBadge level={fav.level} short className="ml-1 text-[10px] px-1.5 py-0 flex-shrink-0" />
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Star className="w-4 h-4 text-yellow-500 fill-yellow-500 flex-shrink-0" />
+                          <span className="font-medium truncate">{fav.ua}</span>
+                          <span className="text-muted-foreground">→</span>
+                          <span className="truncate">{fav.en}</span>
+                          <CefrBadge level={fav.level} short className="ml-1 text-[10px] px-1.5 py-0 flex-shrink-0" />
+                        </div>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="rounded-full h-7 w-7 text-destructive hover:bg-destructive/10 flex-shrink-0"
+                          onClick={() => handleRemoveFavourite(fav.word_id)}
+                          title="Remove from favourites"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
                       </div>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="rounded-full h-7 w-7 text-destructive hover:bg-destructive/10 flex-shrink-0"
-                        onClick={() => handleRemoveFavourite(fav.word_id)}
-                        title="Remove from favourites"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
+                      {fav.definition && (
+                        <p className="text-xs text-muted-foreground pl-6 italic">{fav.definition}</p>
+                      )}
                     </div>
                   ))}
                 </div>

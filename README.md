@@ -156,6 +156,8 @@ and supplemented with manually curated entries.
 VarCon is © Kevin Atkinson, released under the
 [GNU Lesser General Public License (LGPL)](https://www.gnu.org/licenses/lgpl-3.0.html).
 
-## License
+## Credits
 
-MIT
+- Ukrainian-English dictionary data: [dmklinger/ukrainian](https://github.com/dmklinger/ukrainian) — CC BY-SA 3.0
+- MIT License — your code
+- CC BY-SA 3.0 — dictionary data (see NOTICE)

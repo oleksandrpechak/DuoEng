@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,67 +9,16 @@ import {
   BookOpen,
   Users,
   Zap,
-  Search,
-  BarChart3,
-  UserRound,
-  Loader2,
-  History,
-  ChevronLeft,
-  ChevronRight,
-  Trophy,
-  XCircle,
   Gamepad2,
   Star,
   Bot,
   Swords,
+  Trophy,
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
-import CefrBadge, { getCefrColor } from "@/components/CefrBadge";
-
-/** Animated counter: counts from 0 to `end` over `duration` ms */
-function useAnimatedCounter(end, duration = 1000) {
-  const [value, setValue] = useState(0);
-  const rafRef = useRef(null);
-
-  useEffect(() => {
-    if (!end || end <= 0) {
-      setValue(0);
-      return;
-    }
-    const startTime = performance.now();
-    const step = (now) => {
-      const elapsed = now - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      // ease-out quad
-      const eased = 1 - (1 - progress) * (1 - progress);
-      setValue(Math.round(eased * end));
-      if (progress < 1) {
-        rafRef.current = requestAnimationFrame(step);
-      }
-    };
-    rafRef.current = requestAnimationFrame(step);
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    };
-  }, [end, duration]);
-
-  return value;
-}
-
-const FEATURE_TABS = {
-  DICTIONARY: "dictionary",
-  LEADERBOARD: "leaderboard",
-  STATS: "stats",
-  HISTORY: "history",
-};
-
-const featureButtons = [
-  { id: FEATURE_TABS.DICTIONARY, label: "Dictionary", icon: Search },
-  { id: FEATURE_TABS.LEADERBOARD, label: "Leaderboard", icon: BarChart3 },
-  { id: FEATURE_TABS.STATS, label: "My Stats", icon: UserRound },
-  { id: FEATURE_TABS.HISTORY, label: "History", icon: History },
-];
+import { getCefrColor } from "@/components/CefrBadge";
+import useCountUp from "@/hooks/useCountUp";
 
 export default function LandingPage() {
   const navigate = useNavigate();
@@ -85,44 +34,22 @@ export default function LandingPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("create");
 
-  const [featureTab, setFeatureTab] = useState(null);
-  const [isFeatureLoading, setIsFeatureLoading] = useState(false);
-  const [dictionaryQuery, setDictionaryQuery] = useState("");
-  const [dictionaryResults, setDictionaryResults] = useState([]);
-  const [dictionaryLevel, setDictionaryLevel] = useState("");
-  const [leaderboardRows, setLeaderboardRows] = useState([]);
-  const [leaderboardPeriod, setLeaderboardPeriod] = useState("all");
-  const [playerStats, setPlayerStats] = useState(null);
-  const [historyData, setHistoryData] = useState(null);
-  const [historyPage, setHistoryPage] = useState(1);
   const [platformStats, setPlatformStats] = useState(null);
+  const [myGamesCount, setMyGamesCount] = useState(null);
   const [isSignedIn, setIsSignedIn] = useState(() => !!sessionStorage.getItem("accessToken"));
-  const [favouriteWordIds, setFavouriteWordIds] = useState(new Set());
-  const [favouriteLoading, setFavouriteLoading] = useState(new Set());
 
   // Navigation guard: redirect to /me if already signed in
-  // (skip if Google OAuth callback params are present — they need processing first)
-  // (skip if ?action=play or ?tab= is present — user intentionally navigated here)
   useEffect(() => {
     const hasOAuthParams = searchParams.get("access_token") && searchParams.get("user_id");
-    if (hasOAuthParams) return; // let the OAuth useEffect below handle it
+    if (hasOAuthParams) return;
 
     const wantsToPlay = searchParams.get("action") === "play";
-    const hasTab = !!searchParams.get("tab");
-    if (wantsToPlay || hasTab) return; // user intentionally came to landing page
+    if (wantsToPlay) return;
 
     const savedToken = sessionStorage.getItem("accessToken");
     const savedUser = sessionStorage.getItem("userId");
     if (savedToken && savedUser) {
       navigate("/me", { replace: true });
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Auto-open feature tab from ?tab= query param (e.g. from ProfilePage links)
-  useEffect(() => {
-    const tab = searchParams.get("tab");
-    if (tab && Object.values(FEATURE_TABS).includes(tab)) {
-      handleFeatureToggle(tab);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -146,14 +73,25 @@ export default function LandingPage() {
         setPlatformStats(data);
         sessionStorage.setItem(cacheKey, JSON.stringify(data));
       })
-      .catch(() => {
-        // Silently ignore – stats section will just not render
-      });
+      .catch(() => {});
   }, []);
 
-  const animatedWords = useAnimatedCounter(platformStats?.total_words || 0);
-  const animatedPlayers = useAnimatedCounter(platformStats?.total_players || 0);
-  const animatedGames = useAnimatedCounter(platformStats?.total_games_played || 0);
+  // Fetch "My Games" count for signed-in users
+  useEffect(() => {
+    const userId = sessionStorage.getItem("userId");
+    const token = sessionStorage.getItem("accessToken");
+    if (!userId || !token) return;
+
+    api.get(`/players/${userId}/stats`)
+      .then((res) => {
+        setMyGamesCount(res.data?.total_games ?? null);
+      })
+      .catch(() => {});
+  }, [isSignedIn]);
+
+  const animatedWords = useCountUp(platformStats?.total_words || 0);
+  const animatedGames = useCountUp(platformStats?.total_games_played || 0);
+  const animatedMyGames = useCountUp(myGamesCount || 0);
 
   // Handle Google OAuth callback params
   useEffect(() => {
@@ -175,11 +113,10 @@ export default function LandingPage() {
       setNickname(nick);
       setIsSignedIn(true);
       toast.success(`Signed in as ${nick}`);
-      // Clean URL then redirect to profile
       window.history.replaceState({}, document.title, "/");
       navigate("/me");
     }
-  }, [searchParams]);
+  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAuth = async () => {
     if (!nickname.trim() || nickname.length < 2) {
@@ -201,15 +138,6 @@ export default function LandingPage() {
       toast.error("Failed to create user");
       return null;
     }
-  };
-
-  const ensureAuth = async () => {
-    const savedToken = sessionStorage.getItem("accessToken");
-    const savedUserId = sessionStorage.getItem("userId");
-    if (savedToken && savedUserId) {
-      return savedUserId;
-    }
-    return handleAuth();
   };
 
   const handleCreateRoom = async () => {
@@ -277,141 +205,6 @@ export default function LandingPage() {
     window.location.href = `${backendUrl}/api/auth/google`;
   };
 
-  const handleDictionarySearch = async () => {
-    if (!dictionaryQuery.trim()) {
-      toast.error("Enter a word to search");
-      return;
-    }
-
-    const authed = await ensureAuth();
-    if (!authed) {
-      return;
-    }
-
-    setIsFeatureLoading(true);
-    try {
-      const params = { q: dictionaryQuery.trim().toLowerCase() };
-      if (dictionaryLevel) {
-        params.level = dictionaryLevel;
-      }
-      const response = await api.get("/dictionary/search", { params });
-      setDictionaryResults(response.data || []);
-
-      // Load favourites to show star state
-      try {
-        const favResponse = await api.get("/players/me/favourites");
-        const ids = new Set((favResponse.data || []).map((f) => f.word_id));
-        setFavouriteWordIds(ids);
-      } catch {
-        // ignore if favourites fail to load
-      }
-    } catch (error) {
-      toast.error(error.response?.data?.detail || "Dictionary search failed");
-    }
-    setIsFeatureLoading(false);
-  };
-
-  const handleToggleFavourite = async (entry) => {
-    const authed = await ensureAuth();
-    if (!authed) return;
-
-    // Build a word_id from the en_word (matching the seed logic)
-    const wordId = entry.en_word.toLowerCase().replace(/ /g, "_").replace(/'/g, "").slice(0, 64);
-
-    setFavouriteLoading((prev) => new Set(prev).add(wordId));
-    try {
-      if (favouriteWordIds.has(wordId)) {
-        await api.delete(`/players/me/favourites/${wordId}`);
-        setFavouriteWordIds((prev) => {
-          const next = new Set(prev);
-          next.delete(wordId);
-          return next;
-        });
-        toast.success("Removed from favourites");
-      } else {
-        await api.post("/players/me/favourites", { word_id: wordId });
-        setFavouriteWordIds((prev) => new Set(prev).add(wordId));
-        toast.success("Added to favourites ⭐");
-      }
-    } catch (error) {
-      const detail = error.response?.data?.detail || "Failed to update favourite";
-      toast.error(detail);
-    }
-    setFavouriteLoading((prev) => {
-      const next = new Set(prev);
-      next.delete(wordId);
-      return next;
-    });
-  };
-
-  const loadLeaderboard = async (period) => {
-    setIsFeatureLoading(true);
-    try {
-      const response = await api.get("/leaderboard", { params: { limit: 10, period: period || leaderboardPeriod } });
-      setLeaderboardRows(response.data || []);
-    } catch (error) {
-      toast.error("Failed to load leaderboard");
-    }
-    setIsFeatureLoading(false);
-  };
-
-  const handlePeriodChange = async (p) => {
-    setLeaderboardPeriod(p);
-    await loadLeaderboard(p);
-  };
-
-  const loadMyStats = async () => {
-    const userId = await ensureAuth();
-    if (!userId) {
-      return;
-    }
-
-    setIsFeatureLoading(true);
-    try {
-      const response = await api.get(`/players/${userId}/stats`);
-      setPlayerStats(response.data);
-    } catch (error) {
-      toast.error("Failed to load player stats");
-    }
-    setIsFeatureLoading(false);
-  };
-
-  const loadHistory = async (page = 1) => {
-    const userId = await ensureAuth();
-    if (!userId) return;
-
-    setIsFeatureLoading(true);
-    try {
-      const response = await api.get(`/players/${userId}/history`, { params: { page, per_page: 5 } });
-      setHistoryData(response.data);
-      setHistoryPage(page);
-    } catch (error) {
-      toast.error("Failed to load match history");
-    }
-    setIsFeatureLoading(false);
-  };
-
-  const handleFeatureToggle = async (tabId) => {
-    if (featureTab === tabId) {
-      setFeatureTab(null);
-      return;
-    }
-
-    setFeatureTab(tabId);
-
-    if (tabId === FEATURE_TABS.LEADERBOARD && leaderboardRows.length === 0) {
-      await loadLeaderboard();
-    }
-
-    if (tabId === FEATURE_TABS.STATS && !playerStats) {
-      await loadMyStats();
-    }
-
-    if (tabId === FEATURE_TABS.HISTORY && !historyData) {
-      await loadHistory(1);
-    }
-  };
-
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
       <div className="text-center mb-8 animate-fade-in-up">
@@ -426,21 +219,27 @@ export default function LandingPage() {
         </p>
       </div>
 
-      <div className="flex gap-4 mb-8 text-sm text-muted-foreground">
+      {/* ── Stats Counters ── */}
+      <div className="flex flex-wrap justify-center gap-4 mb-8 text-sm text-muted-foreground">
         {platformStats ? (
           <>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               <BookOpen className="w-4 h-4" />
-              <span>{animatedWords.toLocaleString()} Words</span>
+              <span className="tabular-nums font-medium">{animatedWords.toLocaleString()}</span>
+              <span>Words</span>
             </div>
-            <div className="flex items-center gap-1">
-              <Users className="w-4 h-4" />
-              <span>{animatedPlayers.toLocaleString()} Players</span>
-            </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               <Gamepad2 className="w-4 h-4" />
-              <span>{animatedGames.toLocaleString()} Games</span>
+              <span className="tabular-nums font-medium">{animatedGames.toLocaleString()}</span>
+              <span>Games Played</span>
             </div>
+            {isSignedIn && myGamesCount !== null && (
+              <div className="flex items-center gap-1.5">
+                <Trophy className="w-4 h-4" />
+                <span className="tabular-nums font-medium">{animatedMyGames.toLocaleString()}</span>
+                <span>My Games</span>
+              </div>
+            )}
           </>
         ) : (
           <>
@@ -449,12 +248,8 @@ export default function LandingPage() {
               <div className="h-4 w-16 bg-muted rounded animate-pulse" />
             </div>
             <div className="flex items-center gap-1">
-              <Users className="w-4 h-4" />
-              <div className="h-4 w-16 bg-muted rounded animate-pulse" />
-            </div>
-            <div className="flex items-center gap-1">
-              <Zap className="w-4 h-4" />
-              <div className="h-4 w-16 bg-muted rounded animate-pulse" />
+              <Gamepad2 className="w-4 h-4" />
+              <div className="h-4 w-20 bg-muted rounded animate-pulse" />
             </div>
           </>
         )}
@@ -562,7 +357,6 @@ export default function LandingPage() {
 
           {(activeTab === "create" || activeTab === "ai") && (
             <div className="space-y-4 animate-fade-in-up">
-              {/* Mode selection – only for PvP tab */}
               {activeTab === "create" && (
               <div className="space-y-3">
                 <Label className="text-sm font-medium">Game Mode</Label>
@@ -595,7 +389,6 @@ export default function LandingPage() {
               </div>
               )}
 
-              {/* AI mode header */}
               {activeTab === "ai" && (
                 <div className="text-center p-3 rounded-2xl bg-primary/5 border border-primary/20">
                   <Bot className="w-8 h-8 mx-auto text-primary mb-1" />
@@ -789,272 +582,6 @@ export default function LandingPage() {
               >
                 {isLoading ? "Joining..." : "Join Room"}
               </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card className="w-full max-w-md lg:max-w-lg mt-4 rounded-3xl border border-border/70 bg-card/90 backdrop-blur" data-testid="feature-tools">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base font-semibold tracking-wide">Features</CardTitle>
-          <CardDescription>Dictionary, leaderboard, stats &amp; history</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid grid-cols-2 gap-2">
-            {featureButtons.map((item) => {
-              const Icon = item.icon;
-              const isActive = featureTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium transition-all ${
-                    isActive
-                      ? "border-primary/60 bg-primary/10 text-foreground"
-                      : "border-border bg-background hover:border-primary/30 hover:bg-primary/5"
-                  }`}
-                  onClick={() => {
-                    void handleFeatureToggle(item.id);
-                  }}
-                >
-                  <Icon className="h-4 w-4" />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {featureTab === FEATURE_TABS.DICTIONARY && (
-            <div className="space-y-3 rounded-2xl border border-border bg-background p-3">
-              <Label htmlFor="dictionaryQuery">Find translation</Label>
-              <div className="flex gap-2">
-                <Input
-                  id="dictionaryQuery"
-                  placeholder="tree / дерево"
-                  value={dictionaryQuery}
-                  onChange={(e) => setDictionaryQuery(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleDictionarySearch()}
-                />
-                <Button onClick={handleDictionarySearch} disabled={isFeatureLoading}>
-                  {isFeatureLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Search"}
-                </Button>
-              </div>
-
-              {/* CEFR Level Filter */}
-              <div className="flex flex-wrap gap-1">
-                <button
-                  type="button"
-                  className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
-                    dictionaryLevel === ""
-                      ? "bg-foreground text-background border-foreground"
-                      : "bg-muted text-muted-foreground border-border hover:border-primary/40"
-                  }`}
-                  onClick={() => setDictionaryLevel("")}
-                >
-                  All
-                </button>
-                {["A1", "A2", "B1", "B2", "C1", "C2"].map((lvl) => (
-                  <button
-                    key={lvl}
-                    type="button"
-                    className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
-                      dictionaryLevel === lvl
-                        ? `${getCefrColor(lvl)} ring-1 ring-primary/30`
-                        : "bg-muted text-muted-foreground border-border hover:border-primary/40"
-                    }`}
-                    onClick={() => setDictionaryLevel(lvl)}
-                  >
-                    {lvl}
-                  </button>
-                ))}
-              </div>
-
-              <div className="space-y-2 max-h-40 overflow-auto pr-1">
-                {dictionaryResults.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No results yet.</p>
-                ) : (
-                  dictionaryResults.map((entry, idx) => {
-                    const wordId = entry.en_word.toLowerCase().replace(/ /g, "_").replace(/'/g, "").slice(0, 64);
-                    const isFav = favouriteWordIds.has(wordId);
-                    const isFavLoading = favouriteLoading.has(wordId);
-                    return (
-                      <div key={`${entry.ua_word}-${entry.en_word}-${idx}`} className="rounded-xl bg-muted p-2 text-sm">
-                        <div className="flex items-center justify-between">
-                          <p className="font-medium flex-1 min-w-0 truncate">{entry.ua_word} → {entry.en_word}</p>
-                          <div className="flex items-center gap-1 flex-shrink-0 ml-2">
-                            {entry.level && <CefrBadge level={entry.level} short className="text-[10px] px-1.5 py-0" />}
-                            <button
-                              type="button"
-                              className="p-1 rounded-full hover:bg-background/50 transition-colors disabled:opacity-50"
-                              onClick={() => handleToggleFavourite(entry)}
-                              disabled={isFavLoading}
-                              title={isFav ? "Remove from favourites" : "Add to favourites"}
-                            >
-                              <Star className={`w-4 h-4 ${isFav ? "text-yellow-500 fill-yellow-500" : "text-muted-foreground"}`} />
-                            </button>
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground">{entry.part_of_speech || "n/a"} • {entry.source}</p>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-          )}
-
-          {featureTab === FEATURE_TABS.LEADERBOARD && (
-            <div className="space-y-3 rounded-2xl border border-border bg-background p-3">
-              {/* Period tabs */}
-              <div className="flex gap-1 p-1 bg-muted rounded-full">
-                {[
-                  { value: "today", label: "Today" },
-                  { value: "week", label: "This Week" },
-                  { value: "all", label: "All Time" },
-                ].map((p) => (
-                  <button
-                    key={p.value}
-                    className={`flex-1 py-1.5 rounded-full text-xs font-medium transition-all ${
-                      leaderboardPeriod === p.value
-                        ? "bg-white shadow-sm text-black"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                    onClick={() => handlePeriodChange(p.value)}
-                    disabled={isFeatureLoading}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-              <Button variant="outline" className="w-full rounded-full" onClick={() => loadLeaderboard()} disabled={isFeatureLoading}>
-                {isFeatureLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh"}
-              </Button>
-              <div className="space-y-2 max-h-48 overflow-auto pr-1">
-                {leaderboardRows.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Leaderboard is empty.</p>
-                ) : (
-                  leaderboardRows.map((row, index) => (
-                    <div key={row.player_id} className="flex items-center justify-between rounded-xl bg-muted px-3 py-2 text-sm">
-                      <div className="flex items-center gap-2">
-                        {index < 3 ? (
-                          <Trophy className={`w-4 h-4 ${index === 0 ? "text-yellow-500" : index === 1 ? "text-gray-400" : "text-amber-700"}`} />
-                        ) : (
-                          <span className="w-4 text-center text-muted-foreground">#{index + 1}</span>
-                        )}
-                        <p className="font-medium">{row.nickname}</p>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-muted-foreground">{row.wins}W/{row.losses}L</span>
-                        <span className="font-semibold">ELO {row.elo}</span>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-
-          {featureTab === FEATURE_TABS.STATS && (
-            <div className="space-y-3 rounded-2xl border border-border bg-background p-3">
-              <Button variant="outline" className="w-full rounded-full" onClick={loadMyStats} disabled={isFeatureLoading}>
-                {isFeatureLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Load My Stats"}
-              </Button>
-              {playerStats ? (
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div className="rounded-xl bg-muted px-3 py-2">
-                    <p className="text-xs text-muted-foreground">ELO</p>
-                    <p className="font-semibold">{playerStats.elo}</p>
-                  </div>
-                  <div className="rounded-xl bg-muted px-3 py-2">
-                    <p className="text-xs text-muted-foreground">Win rate</p>
-                    <p className="font-semibold">{playerStats.win_rate}%</p>
-                  </div>
-                  <div className="rounded-xl bg-muted px-3 py-2">
-                    <p className="text-xs text-muted-foreground">Games</p>
-                    <p className="font-semibold">{playerStats.total_games}</p>
-                  </div>
-                  <div className="rounded-xl bg-muted px-3 py-2">
-                    <p className="text-xs text-muted-foreground">Avg response</p>
-                    <p className="font-semibold">{playerStats.avg_response_time}s</p>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">No stats loaded yet.</p>
-              )}
-            </div>
-          )}
-
-          {featureTab === FEATURE_TABS.HISTORY && (
-            <div className="space-y-3 rounded-2xl border border-border bg-background p-3">
-              <Button variant="outline" className="w-full rounded-full" onClick={() => loadHistory(1)} disabled={isFeatureLoading}>
-                {isFeatureLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh History"}
-              </Button>
-              {historyData && historyData.matches.length > 0 ? (
-                <>
-                  <div className="space-y-2 max-h-64 overflow-auto pr-1">
-                    {historyData.matches.map((m) => (
-                      <div
-                        key={m.match_id}
-                        className={`rounded-xl p-3 text-sm border ${
-                          m.won ? "bg-accent/20 border-accent/40" : "bg-destructive/10 border-destructive/20"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <div className="flex items-center gap-2">
-                            {m.won ? (
-                              <Trophy className="w-4 h-4 text-accent-foreground" />
-                            ) : (
-                              <XCircle className="w-4 h-4 text-destructive-foreground" />
-                            )}
-                            <span className="font-medium">{m.won ? "Victory" : "Defeat"}</span>
-                          </div>
-                          <span className="text-xs text-muted-foreground">
-                            {m.started_at ? new Date(m.started_at).toLocaleDateString() : "—"}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-muted-foreground">vs {m.opponent_nickname}</span>
-                          <span className="font-semibold">{m.my_score} – {m.opponent_score}</span>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="w-full mt-2 rounded-full text-xs h-7"
-                          onClick={() => navigate(`/lobby/${m.room_code}`)}
-                        >
-                          Play again in {m.room_code}
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                  {/* Pagination */}
-                  <div className="flex items-center justify-between">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="rounded-full"
-                      disabled={historyPage <= 1 || isFeatureLoading}
-                      onClick={() => loadHistory(historyPage - 1)}
-                    >
-                      <ChevronLeft className="w-4 h-4" />
-                    </Button>
-                    <span className="text-xs text-muted-foreground">
-                      Page {historyPage} of {Math.ceil((historyData.total || 1) / (historyData.per_page || 5))}
-                    </span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="rounded-full"
-                      disabled={historyPage >= Math.ceil((historyData.total || 1) / (historyData.per_page || 5)) || isFeatureLoading}
-                      onClick={() => loadHistory(historyPage + 1)}
-                    >
-                      <ChevronRight className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </>
-              ) : (
-                <p className="text-sm text-muted-foreground">No match history yet. Play a game!</p>
-              )}
             </div>
           )}
         </CardContent>

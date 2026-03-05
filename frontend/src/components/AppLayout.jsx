@@ -20,9 +20,9 @@ const NAV_ITEMS = [
   { path: "/?action=play", icon: Gamepad2, label: "Play", matchPath: "/" },
   { path: "/my-words", icon: Plus, label: "My Words" },
   { path: "/wrong-words", icon: XCircle, label: "Wrong Words" },
-  { path: "/?tab=dictionary", icon: Search, label: "Dictionary", matchPath: "/?tab=dictionary" },
-  { path: "/?tab=leaderboard", icon: Trophy, label: "Leaderboard", matchPath: "/?tab=leaderboard" },
-  { path: "/?tab=history", icon: History, label: "History", matchPath: "/?tab=history" },
+  { path: "/dictionary", icon: Search, label: "Dictionary" },
+  { path: "/leaderboard", icon: Trophy, label: "Leaderboard" },
+  { path: "/history", icon: History, label: "History" },
 ];
 
 const BOTTOM_NAV_ITEMS = [
@@ -36,7 +36,7 @@ function isActive(item, location) {
   if (item.matchPath && location.pathname === "/" && location.search.includes(item.matchPath.split("?")[1])) {
     return true;
   }
-  if (item.path === "/?action=play" && location.pathname === "/" && !location.search) {
+  if (item.path === "/?action=play" && location.pathname === "/" && (!location.search || location.search === "?action=play")) {
     return true;
   }
   return location.pathname === item.path;

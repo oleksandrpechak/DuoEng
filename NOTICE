@@ -1,0 +1,12 @@
+THIRD-PARTY NOTICES
+===================
+
+Ukrainian-English Dictionary Data
+----------------------------------
+Source: https://github.com/dmklinger/ukrainian
+License: Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+
+This project uses Ukrainian-English dictionary data from the dmklinger/ukrainian
+repository. The dictionary data is licensed under CC BY-SA 3.0 and any
+derivative works using this data must be shared under the same license.

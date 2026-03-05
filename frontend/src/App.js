@@ -13,6 +13,9 @@ import WordLevelsPage from "@/pages/WordLevelsPage";
 import ProfilePage from "@/pages/ProfilePage";
 import MyWordsPage from "@/pages/MyWordsPage";
 import WrongWordsPage from "@/pages/WrongWordsPage";
+import DictionaryPage from "@/pages/DictionaryPage";
+import LeaderboardPage from "@/pages/LeaderboardPage";
+import HistoryPage from "@/pages/HistoryPage";
 
 function App() {
   return (
@@ -28,6 +31,9 @@ function App() {
               <Route path="/me" element={<ProfilePage />} />
               <Route path="/my-words" element={<MyWordsPage />} />
               <Route path="/wrong-words" element={<WrongWordsPage />} />
+              <Route path="/dictionary" element={<DictionaryPage />} />
+              <Route path="/leaderboard" element={<LeaderboardPage />} />
+              <Route path="/history" element={<HistoryPage />} />
               <Route path="/join/:roomCode" element={<JoinPage />} />
               <Route path="/word-levels" element={<WordLevelsPage />} />
               <Route path="/lobby/:code" element={<LobbyPage />} />
