@@ -30,9 +30,9 @@ AI_NICKNAMES = {
 }
 
 DIFFICULTY_SETTINGS = {
-    "easy": {"correct_rate": 0.40, "response_delay": (3.0, 6.0), "typo_rate": 0.3},
-    "medium": {"correct_rate": 0.65, "response_delay": (2.0, 4.0), "typo_rate": 0.1},
-    "hard": {"correct_rate": 0.90, "response_delay": (1.0, 2.5), "typo_rate": 0.0},
+    "easy": {"correct_rate": 0.40, "response_delay": (0.5, 1.5), "typo_rate": 0.3},
+    "medium": {"correct_rate": 0.65, "response_delay": (0.5, 1.5), "typo_rate": 0.1},
+    "hard": {"correct_rate": 0.90, "response_delay": (0.5, 1.5), "typo_rate": 0.0},
 }
 
 
