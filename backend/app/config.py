@@ -82,6 +82,27 @@ def _build_cors_origins() -> list[str]:
             origins = [frontend_url]
         else:
             origins = ["http://localhost:3000"]
+    
+    # Always include known frontend origins
+    always_allow = [
+        "https://duoeng-frontend.onrender.com",
+        "https://duoeng-production.up.railway.app",
+    ]
+    for origin in always_allow:
+        if origin not in origins:
+            origins.append(origin)
+
+    # Auto-add Railway origin if running on Railway
+    railway_url = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if railway_url:
+        railway_origin = f"https://{railway_url}"
+        if railway_origin not in origins:
+            origins.append(railway_origin)
+
+    # Local dev
+    for local in ["http://localhost:3000", "http://localhost:5173"]:
+        if local not in origins:
+            origins.append(local)
 
     # Auto-add Render frontend origin if running on Render and not already present.
     render_hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME", "").strip()
