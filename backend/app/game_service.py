@@ -981,6 +981,9 @@ class GameService:
 
             session.execute(
                 text(
+
+            session.execute(
+                text(
                     """
                     UPDATE room_players
                     SET score = score + :points
