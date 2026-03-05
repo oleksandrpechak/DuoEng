@@ -981,7 +981,8 @@ class GameService:
 
             session.execute(
                 text(
-
+                    "SELECT ..."
+                ))
             session.execute(
                 text(
                     """
