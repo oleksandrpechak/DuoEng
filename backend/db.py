@@ -143,13 +143,17 @@ def seed_from_dmklinger(force: bool = False) -> int:
     Returns the number of unique words inserted into the words table.
     Idempotent: uses ON CONFLICT upsert.
     """
-    csv_path = Path(__file__).parent / "seeds" / "dmklinger_processed.csv"
+    csv_path = Path(__file__).resolve().parent / "seeds" / "dmklinger_processed.csv"
 
     if not csv_path.exists():
-        logger.warning("dmklinger_processed.csv not found — seeding sample words only")
+        logger.warning(
+            "dmklinger_processed.csv not found at %s — seeding sample words only. "
+            "CWD=%s, __file__=%s",
+            csv_path, Path.cwd(), __file__,
+        )
         return _seed_sample_words(force)
 
-    logger.info("Using dictionary source: %s", csv_path)
+    logger.info("Using dictionary source: %s (%d bytes)", csv_path, csv_path.stat().st_size)
 
     with get_db() as session:
         existing_count = session.execute(text("SELECT COUNT(*) FROM words")).scalar() or 0
@@ -171,8 +175,8 @@ def seed_from_dmklinger(force: bool = False) -> int:
         if is_sqlite
         else "INSERT INTO words (id, ua, en, level, definition, example) "
         "VALUES (:id, :ua, :en, :level, :definition, :example) "
-        "ON CONFLICT (id) DO UPDATE SET ua = :ua, en = :en, level = :level, "
-        "definition = :definition, example = :example"
+        "ON CONFLICT (id) DO UPDATE SET ua = EXCLUDED.ua, en = EXCLUDED.en, level = EXCLUDED.level, "
+        "definition = EXCLUDED.definition, example = EXCLUDED.example"
     )
 
     dict_sql = (
@@ -183,7 +187,7 @@ def seed_from_dmklinger(force: bool = False) -> int:
         else "INSERT INTO dictionary_entries (ua_word, en_word, part_of_speech, source, definition, example, created_at) "
         "VALUES (:ua_word, :en_word, :part_of_speech, :source, :definition, :example, :created_at) "
         "ON CONFLICT (ua_word, en_word) DO UPDATE SET "
-        "definition = :definition, example = :example, source = :source"
+        "definition = EXCLUDED.definition, example = EXCLUDED.example, source = EXCLUDED.source"
     )
 
     inserted_words = 0
@@ -197,15 +201,20 @@ def seed_from_dmklinger(force: bool = False) -> int:
     def flush(session: Session) -> tuple[int, int]:
         nonlocal batch_words, batch_dict
         w = d = 0
-        if batch_words:
-            session.execute(text(word_sql), batch_words)
-            w = len(batch_words)
-            batch_words = []
-        if batch_dict:
-            session.execute(text(dict_sql), batch_dict)
-            d = len(batch_dict)
-            batch_dict = []
-        session.commit()
+        try:
+            if batch_words:
+                session.execute(text(word_sql), batch_words)
+                w = len(batch_words)
+                batch_words = []
+            if batch_dict:
+                session.execute(text(dict_sql), batch_dict)
+                d = len(batch_dict)
+                batch_dict = []
+            session.commit()
+        except Exception as exc:
+            logger.error("Seed flush failed: %s", exc, exc_info=True)
+            session.rollback()
+            raise
         return w, d
 
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
