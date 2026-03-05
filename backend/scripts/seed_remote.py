@@ -19,6 +19,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from sqlalchemy import create_engine, text
 
 # Ensure backend/ is on the path so we can import app.config if needed
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -29,8 +30,6 @@ try:
     load_dotenv(BACKEND_DIR / ".env")
 except ImportError:
     pass  # dotenv not required if DATABASE_URL is set in env
-
-from sqlalchemy import create_engine, text
 
 # ---------------------------------------------------------------------------
 # Configuration
