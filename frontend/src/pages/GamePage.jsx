@@ -40,8 +40,8 @@ export default function GamePage() {
   const wsRef = useRef(null);
   const currentWordRef = useRef(null);
 
-  const userId = sessionStorage.getItem("userId");
-  const accessToken = sessionStorage.getItem("accessToken");
+  const userId = localStorage.getItem("userId");
+  const accessToken = localStorage.getItem("accessToken");
 
   // Fetch initial state ONCE on mount only
   useEffect(() => {
@@ -59,7 +59,7 @@ export default function GamePage() {
 
   // WebSocket connection for all game events
   useEffect(() => {
-    const token = sessionStorage.getItem("accessToken");
+    const token = localStorage.getItem("accessToken");
     if (!token || !code) return;
     const wsUrl = `${WS_URL}/ws/rooms/${code}?token=${token}`;
     const socket = new WebSocket(wsUrl);

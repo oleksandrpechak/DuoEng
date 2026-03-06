@@ -46,24 +46,12 @@ export default function AppLayout({ children }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const isSignedIn = !!sessionStorage.getItem("accessToken");
-  const nickname = sessionStorage.getItem("nickname") || "Player";
+  const isSignedIn = !!localStorage.getItem("accessToken");
+  const nickname = localStorage.getItem("nickname") || "Player";
 
-  // Restore auth from localStorage if missing in sessionStorage
+  // Restore auth from localStorage if missing in localStorage (noop now)
   useEffect(() => {
-    if (!sessionStorage.getItem('accessToken')) {
-      const token = localStorage.getItem('token') || localStorage.getItem('access_token');
-      const playerId = localStorage.getItem('player_id');
-      const nickname = localStorage.getItem('nickname');
-      if (token && playerId) {
-        sessionStorage.setItem('accessToken', token);
-        sessionStorage.setItem('userId', playerId);
-        sessionStorage.setItem('nickname', nickname || 'Player');
-        sessionStorage.setItem('authType', 'guest');
-        // Optionally: trigger a re-render or set auth context here
-        console.log('Restored auth from localStorage:', playerId);
-      }
-    }
+    // No-op: all auth is now in localStorage
   }, []);
 
   // Don't show nav on game/lobby/end/join pages
@@ -80,11 +68,11 @@ export default function AppLayout({ children }) {
   }
 
   const handleLogout = () => {
-    sessionStorage.removeItem("accessToken");
-    sessionStorage.removeItem("userId");
-    sessionStorage.removeItem("nickname");
-    sessionStorage.removeItem("authType");
-    sessionStorage.removeItem("duoeng_platform_stats");
+    localStorage.removeItem("accessToken");
+    localStorage.removeItem("userId");
+    localStorage.removeItem("nickname");
+    localStorage.removeItem("authType");
+    localStorage.removeItem("duoeng_platform_stats");
     navigate("/", { replace: true });
   };
 
@@ -113,7 +101,7 @@ export default function AppLayout({ children }) {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium truncate">{nickname}</p>
             <p className="text-xs text-muted-foreground">
-              {sessionStorage.getItem("authType") === "google" ? "Google" : "Guest"}
+              {localStorage.getItem("authType") === "google" ? "Google" : "Guest"}
             </p>
           </div>
         </div>

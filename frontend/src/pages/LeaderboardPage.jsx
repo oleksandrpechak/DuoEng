@@ -30,8 +30,8 @@ export default function LeaderboardPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [myStats, setMyStats] = useState(null);
 
-  const accessToken = sessionStorage.getItem("accessToken");
-  const userId = sessionStorage.getItem("userId");
+  const accessToken = localStorage.getItem("accessToken");
+  const userId = localStorage.getItem("userId");
 
   useEffect(() => {
     document.title = "Leaderboard — DuoEng";

@@ -36,8 +36,8 @@ export default function MyWordsPage() {
   const [enInput, setEnInput] = useState("");
   const [isAdding, setIsAdding] = useState(false);
 
-  const accessToken = sessionStorage.getItem("accessToken");
-  const userId = sessionStorage.getItem("userId");
+  const accessToken = localStorage.getItem("accessToken");
+  const userId = localStorage.getItem("userId");
 
   useEffect(() => {
     if (!accessToken || !userId) {

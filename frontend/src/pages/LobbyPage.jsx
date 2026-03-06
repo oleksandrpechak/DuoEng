@@ -14,9 +14,9 @@ export default function LobbyPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [copied, setCopied] = useState(false);
 
-  const userId = sessionStorage.getItem("userId");
-  const accessToken = sessionStorage.getItem("accessToken");
-  const nickname = sessionStorage.getItem("nickname") || "a friend";
+  const userId = localStorage.getItem("userId");
+  const accessToken = localStorage.getItem("accessToken");
+  const nickname = localStorage.getItem("nickname") || "a friend";
 
   const roomLink = `${process.env.REACT_APP_FRONTEND_URL || window.location.origin}/join/${code}`;
 

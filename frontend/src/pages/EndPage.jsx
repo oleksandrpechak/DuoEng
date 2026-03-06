@@ -11,8 +11,8 @@ export default function EndPage() {
   const [gameState, setGameState] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const userId = sessionStorage.getItem("userId");
-  const accessToken = sessionStorage.getItem("accessToken");
+  const userId = localStorage.getItem("userId");
+  const accessToken = localStorage.getItem("accessToken");
 
   const fetchGameState = useCallback(async () => {
     if (!userId || !accessToken) {

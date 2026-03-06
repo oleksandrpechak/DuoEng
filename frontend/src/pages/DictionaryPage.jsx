@@ -41,8 +41,8 @@ export default function DictionaryPage() {
   const [favLoading, setFavLoading] = useState(new Set());
 
   const debounceRef = useRef(null);
-  const accessToken = sessionStorage.getItem("accessToken");
-  const userId = sessionStorage.getItem("userId");
+  const accessToken = localStorage.getItem("accessToken");
+  const userId = localStorage.getItem("userId");
 
   useEffect(() => {
     document.title = "Dictionary — DuoEng";

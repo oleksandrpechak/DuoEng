@@ -18,8 +18,8 @@ export default function WrongWordsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [favouriteLoading, setFavouriteLoading] = useState(new Set());
 
-  const accessToken = sessionStorage.getItem("accessToken");
-  const userId = sessionStorage.getItem("userId");
+  const accessToken = localStorage.getItem("accessToken");
+  const userId = localStorage.getItem("userId");
 
   useEffect(() => {
     if (!accessToken || !userId) {

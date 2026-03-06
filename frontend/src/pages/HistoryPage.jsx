@@ -48,8 +48,8 @@ export default function HistoryPage() {
   const [isPageLoading, setIsPageLoading] = useState(false);
   const [outcomeFilter, setOutcomeFilter] = useState("all");
 
-  const accessToken = sessionStorage.getItem("accessToken");
-  const userId = sessionStorage.getItem("userId");
+  const accessToken = localStorage.getItem("accessToken");
+  const userId = localStorage.getItem("userId");
 
   useEffect(() => {
     document.title = "Match History — DuoVocab";

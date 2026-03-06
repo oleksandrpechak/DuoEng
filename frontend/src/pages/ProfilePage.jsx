@@ -37,7 +37,7 @@ export default function ProfilePage() {
   const [nicknameInput, setNicknameInput] = useState("");
   const [isNicknameSaving, setIsNicknameSaving] = useState(false);
   const [currentNickname, setCurrentNickname] = useState(
-    sessionStorage.getItem("nickname") || "Player"
+    localStorage.getItem("nickname") || "Player"
   );
 
   // Favourites
@@ -45,9 +45,9 @@ export default function ProfilePage() {
   const [isFavouritesLoading, setIsFavouritesLoading] = useState(false);
   const [showFavourites, setShowFavourites] = useState(false);
 
-  const accessToken = sessionStorage.getItem("accessToken");
-  const userId = sessionStorage.getItem("userId");
-  const authType = sessionStorage.getItem("authType") || "guest";
+  const accessToken = localStorage.getItem("accessToken");
+  const userId = localStorage.getItem("userId");
+  const authType = localStorage.getItem("authType") || "guest";
 
   // Redirect to home if not logged in
   useEffect(() => {
@@ -73,11 +73,11 @@ export default function ProfilePage() {
   }, [accessToken, userId]);
 
   const handleLogout = () => {
-    sessionStorage.removeItem("accessToken");
-    sessionStorage.removeItem("userId");
-    sessionStorage.removeItem("nickname");
-    sessionStorage.removeItem("authType");
-    sessionStorage.removeItem("duoeng_platform_stats");
+    localStorage.removeItem("accessToken");
+    localStorage.removeItem("userId");
+    localStorage.removeItem("nickname");
+    localStorage.removeItem("authType");
+    localStorage.removeItem("duoeng_platform_stats");
     toast.success("Logged out");
     navigate("/", { replace: true });
   };
@@ -110,9 +110,9 @@ export default function ProfilePage() {
         nickname: trimmed,
       });
       const { nickname: newNickname, access_token } = response.data;
-      // Update sessionStorage
-      sessionStorage.setItem("nickname", newNickname);
-      sessionStorage.setItem("accessToken", access_token);
+      // Update localStorage
+      localStorage.setItem("nickname", newNickname);
+      localStorage.setItem("accessToken", access_token);
       setCurrentNickname(newNickname);
       setIsEditingNickname(false);
       toast.success("Nickname updated!");

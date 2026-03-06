@@ -11,11 +11,11 @@ import api from "@/lib/api";
 export default function JoinPage() {
   const navigate = useNavigate();
   const { roomCode } = useParams();
-  const [nickname, setNickname] = useState(sessionStorage.getItem("nickname") || "");
+  const [nickname, setNickname] = useState(localStorage.getItem("nickname") || "");
   const [isLoading, setIsLoading] = useState(false);
   const [autoJoining, setAutoJoining] = useState(false);
 
-  const isSignedIn = !!sessionStorage.getItem("accessToken");
+  const isSignedIn = !!localStorage.getItem("accessToken");
 
   // Auto-join if already signed in
   useEffect(() => {
@@ -46,10 +46,10 @@ export default function JoinPage() {
       localStorage.setItem('access_token', token);
       localStorage.setItem('player_id', playerId);
       localStorage.setItem('nickname', playerNickname);
-      sessionStorage.setItem("accessToken", token);
-      sessionStorage.setItem("userId", playerId);
-      sessionStorage.setItem("nickname", playerNickname);
-      sessionStorage.setItem("authType", "guest");
+      localStorage.setItem("accessToken", token);
+      localStorage.setItem("userId", playerId);
+      localStorage.setItem("nickname", playerNickname);
+      localStorage.setItem("authType", "guest");
       return playerId;
     } catch (error) {
       toast.error("Failed to create user");
@@ -60,8 +60,8 @@ export default function JoinPage() {
   const handleJoin = async () => {
     setIsLoading(true);
 
-    let userId = sessionStorage.getItem("userId");
-    if (!userId || !sessionStorage.getItem("accessToken")) {
+    let userId = localStorage.getItem("userId");
+    if (!userId || !localStorage.getItem("accessToken")) {
       userId = await handleAuth();
       if (!userId) {
         setIsLoading(false);

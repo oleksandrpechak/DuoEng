@@ -35,10 +35,13 @@ const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
-  const token = sessionStorage.getItem("accessToken");
+  const token = localStorage.getItem('accessToken');
+  const userId = localStorage.getItem('userId');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // Optionally attach userId if needed elsewhere
+  // config.headers['X-User-Id'] = userId;
   return config;
 });
 
@@ -49,11 +52,11 @@ api.interceptors.response.use(
     if (error.response && error.response.status === 401) {
       const detail = error.response.data?.detail || "";
       if (detail === "Token expired" || detail === "Invalid token" || detail === "Player not found") {
-        sessionStorage.removeItem("accessToken");
-        sessionStorage.removeItem("userId");
-        sessionStorage.removeItem("nickname");
-        sessionStorage.removeItem("authType");
-        sessionStorage.removeItem("duoeng_platform_stats");
+        localStorage.removeItem("accessToken");
+        localStorage.removeItem("userId");
+        localStorage.removeItem("nickname");
+        localStorage.removeItem("authType");
+        localStorage.removeItem("duoeng_platform_stats");
         // Redirect to landing page to re-authenticate
         if (window.location.pathname !== "/") {
           window.location.href = "/";

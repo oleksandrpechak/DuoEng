@@ -23,7 +23,7 @@ import useCountUp from "@/hooks/useCountUp";
 export default function LandingPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [nickname, setNickname] = useState(sessionStorage.getItem("nickname") || "");
+  const [nickname, setNickname] = useState(localStorage.getItem("nickname") || "");
   const [joinCode, setJoinCode] = useState("");
   const [mode, setMode] = useState("classic");
   const [targetScore, setTargetScore] = useState(10);
@@ -36,7 +36,7 @@ export default function LandingPage() {
 
   const [platformStats, setPlatformStats] = useState(null);
   const [myGamesCount, setMyGamesCount] = useState(null);
-  const [isSignedIn, setIsSignedIn] = useState(() => !!sessionStorage.getItem("accessToken"));
+  const [isSignedIn, setIsSignedIn] = useState(() => !!localStorage.getItem("accessToken"));
 
   const loginAsGuest = async (nickname) => {
     if (!nickname || nickname.trim().length < 2) {
@@ -69,10 +69,10 @@ export default function LandingPage() {
       localStorage.setItem('access_token', token)
       localStorage.setItem('player_id', playerId)
       localStorage.setItem('nickname', playerNickname)
-      sessionStorage.setItem('accessToken', token)
-      sessionStorage.setItem('userId', playerId)
-      sessionStorage.setItem('nickname', playerNickname)
-      sessionStorage.setItem('authType', 'guest')
+      localStorage.setItem('accessToken', token)
+      localStorage.setItem('userId', playerId)
+      localStorage.setItem('nickname', playerNickname)
+      localStorage.setItem('authType', 'guest')
       setIsSignedIn(true)
       if (setAuth) setAuth({ token, playerId, nickname: playerNickname })
       navigate('/')
@@ -104,11 +104,11 @@ export default function LandingPage() {
     localStorage.setItem('player_id', data.player_id)
     localStorage.setItem('nickname', data.nickname)
 
-    // Remove from sessionStorage if it was there before
-    sessionStorage.removeItem('nickname')
-    sessionStorage.removeItem('accessToken')
-    sessionStorage.removeItem('userId')
-    sessionStorage.removeItem('authType')
+    // Remove from localStorage if it was there before
+    localStorage.removeItem('nickname')
+    localStorage.removeItem('accessToken')
+    localStorage.removeItem('userId')
+    localStorage.removeItem('authType')
 
     navigate('/') // or wherever after login
   }
@@ -121,17 +121,17 @@ export default function LandingPage() {
     const wantsToPlay = searchParams.get("action") === "play";
     if (wantsToPlay) return;
 
-    const savedToken = sessionStorage.getItem("accessToken");
-    const savedUser = sessionStorage.getItem("userId");
+    const savedToken = localStorage.getItem("accessToken");
+    const savedUser = localStorage.getItem("userId");
     if (savedToken && savedUser) {
       navigate("/me", { replace: true });
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch public stats (no auth needed) with sessionStorage cache
+  // Fetch public stats (no auth needed) with localStorage cache
   useEffect(() => {
     const cacheKey = "duoeng_platform_stats";
-    const cached = sessionStorage.getItem(cacheKey);
+    const cached = localStorage.getItem(cacheKey);
     if (cached) {
       try {
         const parsed = JSON.parse(cached);
@@ -146,15 +146,15 @@ export default function LandingPage() {
       .then((res) => {
         const data = { ...res.data, _cachedAt: Date.now() };
         setPlatformStats(data);
-        sessionStorage.setItem(cacheKey, JSON.stringify(data));
+        localStorage.setItem(cacheKey, JSON.stringify(data));
       })
       .catch(() => {});
   }, []);
 
   // Fetch "My Games" count for signed-in users
   useEffect(() => {
-    const userId = sessionStorage.getItem("userId");
-    const token = sessionStorage.getItem("accessToken");
+    const userId = localStorage.getItem("userId");
+    const token = localStorage.getItem("accessToken");
     if (!userId || !token) return;
 
     api.get(`/players/${userId}/stats`)
@@ -181,10 +181,10 @@ export default function LandingPage() {
     }
 
     if (token && userId && nick) {
-      sessionStorage.setItem("accessToken", token);
-      sessionStorage.setItem("userId", userId);
-      sessionStorage.setItem("nickname", nick);
-      sessionStorage.setItem("authType", "google");
+      localStorage.setItem("accessToken", token);
+      localStorage.setItem("userId", userId);
+      localStorage.setItem("nickname", nick);
+      localStorage.setItem("authType", "google");
       setNickname(nick);
       setIsSignedIn(true);
       toast.success(`Signed in as ${nick}`);
@@ -213,10 +213,10 @@ export default function LandingPage() {
       localStorage.setItem('access_token', token);
       localStorage.setItem('player_id', playerId);
       localStorage.setItem('nickname', playerNickname);
-      sessionStorage.setItem("accessToken", token);
-      sessionStorage.setItem("userId", playerId);
-      sessionStorage.setItem("nickname", playerNickname);
-      sessionStorage.setItem("authType", "guest");
+      localStorage.setItem("accessToken", token);
+      localStorage.setItem("userId", playerId);
+      localStorage.setItem("nickname", playerNickname);
+      localStorage.setItem("authType", "guest");
       setIsSignedIn(true);
       if (setAuth) setAuth({ token, playerId, nickname: playerNickname });
       return playerId;
@@ -389,7 +389,7 @@ export default function LandingPage() {
 
           {isSignedIn && (
             <div className="text-center text-sm text-muted-foreground">
-              Signed in as <span className="font-semibold text-foreground">{sessionStorage.getItem("nickname")}</span>
+              Signed in as <span className="font-semibold text-foreground">{localStorage.getItem("nickname")}</span>
               <span className="mx-1">•</span>
               <button
                 className="text-primary hover:underline font-medium"
