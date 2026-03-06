@@ -49,6 +49,23 @@ export default function AppLayout({ children }) {
   const isSignedIn = !!sessionStorage.getItem("accessToken");
   const nickname = sessionStorage.getItem("nickname") || "Player";
 
+  // Restore auth from localStorage if missing in sessionStorage
+  useEffect(() => {
+    if (!sessionStorage.getItem('accessToken')) {
+      const token = localStorage.getItem('token') || localStorage.getItem('access_token');
+      const playerId = localStorage.getItem('player_id');
+      const nickname = localStorage.getItem('nickname');
+      if (token && playerId) {
+        sessionStorage.setItem('accessToken', token);
+        sessionStorage.setItem('userId', playerId);
+        sessionStorage.setItem('nickname', nickname || 'Player');
+        sessionStorage.setItem('authType', 'guest');
+        // Optionally: trigger a re-render or set auth context here
+        console.log('Restored auth from localStorage:', playerId);
+      }
+    }
+  }, []);
+
   // Don't show nav on game/lobby/end/join pages
   const gameRoutePatterns = ["/game/", "/lobby/", "/end/", "/join/"];
   const isGameRoute = gameRoutePatterns.some((p) => location.pathname.startsWith(p));

@@ -27,19 +27,30 @@ export default function JoinPage() {
   }, [isSignedIn, roomCode]);
 
   const handleAuth = async () => {
-    if (!nickname.trim() || nickname.length < 2) {
+    if (!nickname || nickname.trim().length < 2) {
       toast.error("Please enter a nickname (2+ characters)");
       return null;
     }
-
+    const trimmed = nickname.trim();
     try {
-      const response = await api.post("/auth/guest", {
-        nickname: nickname.trim(),
-      });
-      sessionStorage.setItem("userId", response.data.user_id);
-      sessionStorage.setItem("nickname", response.data.nickname);
-      sessionStorage.setItem("accessToken", response.data.access_token);
-      return response.data.user_id;
+      const response = await api.post("/auth/guest", { nickname: trimmed });
+      const data = response.data;
+      const token = data.access_token || data.token;
+      const playerId = data.player_id || data.id;
+      const playerNickname = data.nickname || trimmed;
+      if (!token) {
+        toast.error("No token in response");
+        return null;
+      }
+      localStorage.setItem('token', token);
+      localStorage.setItem('access_token', token);
+      localStorage.setItem('player_id', playerId);
+      localStorage.setItem('nickname', playerNickname);
+      sessionStorage.setItem("accessToken", token);
+      sessionStorage.setItem("userId", playerId);
+      sessionStorage.setItem("nickname", playerNickname);
+      sessionStorage.setItem("authType", "guest");
+      return playerId;
     } catch (error) {
       toast.error("Failed to create user");
       return null;

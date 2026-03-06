@@ -39,20 +39,47 @@ export default function LandingPage() {
   const [isSignedIn, setIsSignedIn] = useState(() => !!sessionStorage.getItem("accessToken"));
 
   const loginAsGuest = async (nickname) => {
-  const res = await fetch(`${API_URL}/api/auth/guest`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ nickname })
-  })
-  const data = await res.json()
-  console.log('Login response:', data) // add this to see what's returned
-  
-  // Make sure ALL of these are saved:
-  localStorage.setItem('token', data.access_token)
-  localStorage.setItem('access_token', data.access_token)
-  localStorage.setItem('player_id', data.player_id)
-  localStorage.setItem('nickname', data.nickname)
-}
+    if (!nickname || nickname.trim().length < 2) {
+      alert('Please enter a nickname (2+ characters)')
+      return
+    }
+    const trimmed = nickname.trim()
+    try {
+      const res = await fetch(`${API_URL}/api/auth/guest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: trimmed })
+      })
+      console.log('Guest login status:', res.status)
+      const data = await res.json()
+      console.log('Guest login response:', data)
+      if (!res.ok) {
+        console.error('Guest login failed:', data)
+        alert('Login failed: ' + (data.detail || 'Unknown error'))
+        return
+      }
+      const token = data.access_token || data.token
+      const playerId = data.player_id || data.id
+      const playerNickname = data.nickname || trimmed
+      if (!token) {
+        console.error('No token in response:', data)
+        return
+      }
+      localStorage.setItem('token', token)
+      localStorage.setItem('access_token', token)
+      localStorage.setItem('player_id', playerId)
+      localStorage.setItem('nickname', playerNickname)
+      sessionStorage.setItem('accessToken', token)
+      sessionStorage.setItem('userId', playerId)
+      sessionStorage.setItem('nickname', playerNickname)
+      sessionStorage.setItem('authType', 'guest')
+      setIsSignedIn(true)
+      if (setAuth) setAuth({ token, playerId, nickname: playerNickname })
+      navigate('/')
+    } catch (err) {
+      console.error('Guest login error:', err)
+    }
+  }
 
   // Navigation guard: redirect to /me if already signed in
   useEffect(() => {
@@ -135,21 +162,32 @@ export default function LandingPage() {
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAuth = async () => {
-    if (!nickname.trim() || nickname.length < 2) {
+    if (!nickname || nickname.trim().length < 2) {
       toast.error("Please enter a nickname (2+ characters)");
       return null;
     }
-
+    const trimmed = nickname.trim();
     try {
-      const response = await api.post("/auth/guest", {
-        nickname: nickname.trim(),
-      });
-      sessionStorage.setItem("userId", response.data.user_id);
-      sessionStorage.setItem("nickname", response.data.nickname);
-      sessionStorage.setItem("accessToken", response.data.access_token);
+      const response = await api.post("/auth/guest", { nickname: trimmed });
+      const data = response.data;
+      const token = data.access_token || data.token;
+      const playerId = data.player_id || data.id;
+      const playerNickname = data.nickname || trimmed;
+      if (!token) {
+        toast.error("No token in response");
+        return null;
+      }
+      localStorage.setItem('token', token);
+      localStorage.setItem('access_token', token);
+      localStorage.setItem('player_id', playerId);
+      localStorage.setItem('nickname', playerNickname);
+      sessionStorage.setItem("accessToken", token);
+      sessionStorage.setItem("userId", playerId);
+      sessionStorage.setItem("nickname", playerNickname);
       sessionStorage.setItem("authType", "guest");
       setIsSignedIn(true);
-      return response.data.user_id;
+      if (setAuth) setAuth({ token, playerId, nickname: playerNickname });
+      return playerId;
     } catch (error) {
       toast.error("Failed to create user");
       return null;
