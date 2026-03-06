@@ -290,7 +290,7 @@ async def create_room(
     payload: CreateRoomRequest,
     request: Request,
     auth: AuthContext = Depends(_auth_user_from_header),
-) -> JoinRoomResponse:
+) -> dict:
     result = service.create_room(
         player_id=auth.player_id,
         mode=payload.mode,
@@ -302,7 +302,11 @@ async def create_room(
         ai_difficulty=payload.ai_difficulty,
         word_ids=payload.word_ids,
     )
-    return JoinRoomResponse(**result)
+    frontend_url = settings.frontend_url or "https://duoeng-frontend.onrender.com"
+    return {
+        **result,
+        "join_url": f"{frontend_url}/join/{result['code']}"
+    }
 
 
 @api_router.post("/rooms/{room_code}/join", response_model=JoinRoomResponse)

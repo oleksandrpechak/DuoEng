@@ -12,6 +12,7 @@ export default function LobbyPage() {
   const { code } = useParams();
   const [gameState, setGameState] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
 
   const userId = sessionStorage.getItem("userId");
   const accessToken = sessionStorage.getItem("accessToken");
@@ -53,10 +54,27 @@ export default function LobbyPage() {
     toast.success("Room code copied!");
   };
 
-  const copyLink = () => {
-    const challengeMsg = `Wanna duel ${nickname}? I dare you! 🎯\nJoin my game: ${roomLink}`;
-    navigator.clipboard.writeText(challengeMsg);
-    toast.success("Challenge link copied! 🎯");
+  const copyLink = async () => {
+    const roomLink = `${window.location.origin}/join/${code}`;
+    try {
+      await navigator.clipboard.writeText(roomLink);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      toast.success("Room link copied!");
+    } catch (err) {
+      // Fallback for browsers that block clipboard API
+      const textarea = document.createElement('textarea');
+      textarea.value = roomLink;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      toast.success("Room link copied!");
+    }
   };
 
   const shareRoom = async () => {
@@ -103,6 +121,19 @@ export default function LobbyPage() {
               <Copy className="w-5 h-5 text-muted-foreground" />
             </div>
             <p className="text-xs text-muted-foreground mt-2">Click to copy code</p>
+          </div>
+
+          {/* Room Link Display and Copy */}
+          <div className="flex items-center gap-2 p-3 bg-gray-100 rounded-lg mt-4">
+            <span className="text-sm text-gray-600 truncate flex-1">
+              {window.location.origin}/join/{code}
+            </span>
+            <button
+              onClick={() => copyLink()}
+              className="shrink-0 px-3 py-1 bg-blue-500 text-white rounded text-sm"
+            >
+              {copied ? '✓ Copied!' : 'Copy'}
+            </button>
           </div>
 
           {/* Share Buttons */}
