@@ -19,6 +19,10 @@ import { toast } from "sonner";
 import api from "@/lib/api";
 import CefrBadge from "@/components/CefrBadge";
 
+const WS_URL = (process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000')
+  .replace('https://', 'wss://')
+  .replace('http://', 'ws://');
+
 export default function GamePage() {
   const navigate = useNavigate();
   const { code } = useParams();
@@ -38,100 +42,86 @@ export default function GamePage() {
   const userId = sessionStorage.getItem("userId");
   const accessToken = sessionStorage.getItem("accessToken");
 
-  const fetchGameState = useCallback(async () => {
-    if (!userId || !accessToken) {
-      navigate("/");
-      return;
-    }
-
-    try {
-      const response = await api.get(`/rooms/${code}/state`);
-      setGameState(response.data);
-
-      if (response.data.last_feedback) {
-        setLastFeedback(response.data.last_feedback);
-      }
-
-      if (response.data.status === "finished") {
-        navigate(`/end/${code}`);
-      }
-
-      if (response.data.status === "waiting") {
-        navigate(`/lobby/${code}`);
-      }
-
-      const myPlayer = response.data.players.find(p => p.user_id === userId);
-      if (myPlayer?.is_current_turn && inputRef.current) {
-        inputRef.current.focus();
-      }
-    } catch (error) {
-      console.error("Failed to fetch game state", error);
-    }
-  }, [accessToken, code, userId, navigate]);
-
+  // Fetch initial state ONCE on mount only
   useEffect(() => {
-    fetchGameState();
-    const interval = setInterval(fetchGameState, 2000);
-    return () => clearInterval(interval);
-  }, [fetchGameState]);
+    const fetchInitialState = async () => {
+      try {
+        const response = await api.get(`/rooms/${code}/state`);
+        setGameState(response.data);
+        // Optionally set other state here
+      } catch (error) {
+        console.error("Failed to fetch game state", error);
+      }
+    };
+    fetchInitialState();
+  }, [code]);
 
-  // WebSocket connection for real-time pause/resume/leave
+  // WebSocket connection for all game events
   useEffect(() => {
-    if (!accessToken || !code) return;
-
-    const backendUrl = (process.env.REACT_APP_BACKEND_URL || "http://localhost:8000").replace(/^http/, "ws");
-    const wsUrl = `${backendUrl}/ws/rooms/${code}?token=${accessToken}`;
-
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onmessage = (event) => {
+    const token = sessionStorage.getItem("accessToken");
+    if (!token || !code) return;
+    const wsUrl = `${WS_URL}/ws/rooms/${code}?token=${token}`;
+    const socket = new WebSocket(wsUrl);
+    setWs(socket);
+    wsRef.current = socket;
+    socket.onopen = () => {
+      console.log('WebSocket connected');
+    };
+    socket.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        if (msg.type === "game_paused") {
-          setIsPaused(true);
-          setPausedBy(msg.paused_by);
-          toast.info(`Game paused by ${msg.paused_by}`);
-        } else if (msg.type === "game_resumed") {
-          setIsPaused(false);
-          setPausedBy(null);
-          toast.success("Game resumed!");
-        } else if (msg.type === "opponent_left") {
-          toast.success(msg.message || "Your opponent left. You win!");
-          setTimeout(() => navigate(`/end/${code}`), 1500);
-        } else if (msg.type === "game_state") {
-          setGameState(msg.data);
-          if (msg.data?.last_feedback) setLastFeedback(msg.data.last_feedback);
-          if (msg.data?.status === "finished") navigate(`/end/${code}`);
-        } else if (msg.type === "second_chance") {
-          // Opponent answered wrong – you get a 10s steal opportunity
-          setSecondChance({
-            word_ua: msg.word_ua,
-            word_en: msg.word_en,
-            expires_in: msg.expires_in || 10,
-          });
-          setSecondChanceAnswer("");
-          toast.info("⚡ Steal opportunity! Answer before time runs out!");
-        } else if (msg.type === "second_chance_expired") {
-          setSecondChance(null);
-          setSecondChanceAnswer("");
-        } else if (msg.type === "second_chance") {
-          setSecondChance(msg.data);
-          toast.info("You have a second chance to answer!");
+        switch (msg.type) {
+          case 'room_state':
+          case 'state_update':
+            setGameState(msg.state || msg);
+            break;
+          case 'new_word':
+          case 'word_changed':
+            setGameState((prev) => ({ ...prev, current_turn: { ...prev.current_turn, word_ua: msg.word } }));
+            setAnswer('');
+            inputRef.current?.focus();
+            break;
+          case 'turn_result':
+          case 'answer_result':
+            setLastFeedback({
+              player_nickname: msg.player_nickname,
+              answer: msg.answer,
+              points: msg.score,
+              correct_en: msg.correct_answer,
+              scoring_source: msg.scoring_source,
+              status: msg.status,
+              word_ua: msg.word_ua,
+            });
+            setGameState((prev) => ({ ...prev, players: msg.scores || prev.players }));
+            break;
+          case 'game_over':
+            // ...handle game over...
+            break;
+          case 'player_joined':
+          case 'player_left':
+            setGameState((prev) => ({ ...prev, players: msg.players }));
+            break;
+          case 'ping':
+            socket.send(JSON.stringify({ type: 'pong' }));
+            break;
         }
-      } catch {
+      } catch (e) {
         // ignore parse errors
       }
     };
-
-    ws.onerror = () => {};
-    ws.onclose = () => {};
-
+    socket.onclose = () => {
+      setWs(null);
+      wsRef.current = null;
+      console.log('WebSocket disconnected');
+    };
+    socket.onerror = (err) => {
+      console.error('WebSocket error:', err);
+    };
     return () => {
-      ws.close();
+      socket.close();
       wsRef.current = null;
     };
-  }, [accessToken, code, navigate]);
+  }, [code]);
 
   const handlePauseResume = () => {
     const ws = wsRef.current;
@@ -179,66 +169,20 @@ export default function GamePage() {
     setIsSecondChanceSubmitting(false);
   };
 
-  const handleSubmit = async (e) => {
+  // Submit answer via WebSocket
+  const handleSubmit = (e) => {
     e.preventDefault();
-    if (!answer.trim() || isSubmitting) return;
-    // Clear input immediately
+    if (!answer.trim() || !ws) return;
+    const submittedAnswer = answer.trim();
     setAnswer('');
     if (inputRef.current) {
       inputRef.current.value = '';
       inputRef.current.focus();
     }
-    setIsSubmitting(true);
-    try {
-      const response = await api.post(`/rooms/${code}/turn`, {
-        answer: answer.trim()
-      });
-
-      const { points, feedback, correct_answer, game_over, scoring_source } = response.data;
-
-      // Show scoring source feedback for 2.5 seconds
-      const source = (scoring_source || "").toLowerCase();
-      if (feedback === "exact" || points >= 2) {
-        setScoringSourceMsg({
-          text: `🎯 +${points} · exact translation!`,
-          color: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-        });
-        toast.success(`Perfect translation! +${points} points`);
-      } else if (feedback === "correct" || points === 1) {
-        const isDictionary = source.includes("dictionary");
-        setScoringSourceMsg({
-          text: isDictionary ? `✓ +${points} · similar match` : `✓ +${points} · AI accepted`,
-          color: isDictionary ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
-                              : "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
-        });
-        toast.success(`Good description! +${points} point`);
-      } else if (feedback === "expired") {
-        setScoringSourceMsg(null);
-        toast.error(`Time expired! The word was: ${correct_answer}`);
-      } else {
-        const isDictionary = source.includes("dictionary");
-        setScoringSourceMsg({
-          text: isDictionary ? `✗ 0 · dictionary: no match` : `✗ 0 · AI: incorrect`,
-          color: isDictionary ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
-                              : "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300",
-        });
-        toast.error(`Not accepted. The word was: ${correct_answer}`);
-      }
-
-      // Auto-clear scoring source message after 2.5s
-      setTimeout(() => setScoringSourceMsg(null), 2500);
-
-      setAnswer("");
-
-      if (game_over) {
-        navigate(`/end/${code}`);
-      } else {
-        await fetchGameState();
-      }
-    } catch (error) {
-      toast.error(error.response?.data?.detail || "Failed to submit answer");
-    }
-    setIsSubmitting(false);
+    ws.send(JSON.stringify({
+      type: 'submit_answer',
+      answer: submittedAnswer,
+    }));
   };
 
   useEffect(() => {
