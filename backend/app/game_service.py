@@ -1607,10 +1607,9 @@ class GameService:
                 current_turn = room["current_turn"]
                 if not current_turn:
                     return
-                ua_word = room["current_word_ua"] or ""
                 en_word = room["current_word_en"] or ""
                 word_id = room.get("current_word_id") or ""
-                word = {"ua": ua_word, "en": en_word, "id": word_id}
+                word = {"ua": room["current_word_ua"] or "", "en": en_word, "id": word_id}
             # Use ws_manager.broadcast for broadcasting
             await ai_take_turn(
                 room_code=room_code,
@@ -1662,17 +1661,16 @@ class GameService:
                 raise HTTPException(status_code=409, detail="Second chance expired")
 
             correct_answer = room["current_word_en"] or ""
-            ua_word = room["current_word_ua"] or ""
 
-        # Score the answer
-        scoring = await self.scorer.score_description(correct_answer, answer, ua_word=ua_word)
+        # Use instant local scoring for second chance
+        score = score_answer(answer, correct_answer)
 
         with get_db() as session:
             room = self._fetch_room(session, normalized_code)
             if not room or room["status"] != "playing":
                 raise HTTPException(status_code=400, detail="Match is not active")
 
-            if scoring.score > 0:
+            if score > 0:
                 session.execute(
                     text(
                         """
@@ -1681,7 +1679,7 @@ class GameService:
                         WHERE room_code = :room_code AND player_id = :player_id
                         """
                     ),
-                    {"points": scoring.score, "room_code": normalized_code, "player_id": player_id},
+                    {"points": score, "room_code": normalized_code, "player_id": player_id},
                 )
 
             # Clear second chance and advance turn
@@ -1713,9 +1711,9 @@ class GameService:
 
         return {
             "room_code": normalized_code,
-            "points": scoring.score,
-            "scoring_source": scoring.source,
-            "feedback": "exact" if scoring.score >= 2 else "correct" if scoring.score >= 1 else "wrong",
+            "points": score,
+            "scoring_source": "local",
+            "feedback": "exact" if score >= 2 else "correct" if score >= 1 else "wrong",
             "correct_answer": correct_answer,
             "game_over": game_over,
             "winner_id": winner_id,
