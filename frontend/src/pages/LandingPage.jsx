@@ -38,6 +38,15 @@ export default function LandingPage() {
   const [myGamesCount, setMyGamesCount] = useState(null);
   const [isSignedIn, setIsSignedIn] = useState(() => !!localStorage.getItem("accessToken"));
 
+  // Max 15 characters, safely under the 20 limit
+  useEffect(() => {
+    if (!localStorage.getItem("nickname")) {
+      const nickname = 'Guest' + Math.floor(Math.random() * 9999);
+      setNickname(nickname);
+      localStorage.setItem("nickname", nickname);
+    }
+  }, []);
+
   const loginAsGuest = async (nickname) => {
     if (!nickname || nickname.trim().length < 2) {
       alert('Please enter a nickname (2+ characters)')

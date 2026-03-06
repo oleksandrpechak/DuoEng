@@ -1,6 +1,7 @@
 {
   "name": "frontend",
   "version": "0.1.0",
+  "build": "craco build && cp public/_redirects build/_redirects",
   "private": true,
   "dependencies": {
     "@hookform/resolvers": "^5.0.1",
