@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from difflib import SequenceMatcher
 import logging
 
 logger = logging.getLogger("duoeng.scoring")

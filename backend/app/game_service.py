@@ -18,10 +18,10 @@ from .config import settings
 from .db import get_db, seed_from_dmklinger
 from .elo import expected_score, update_elo
 from .rate_limit import SlidingWindowLimiter, ViolationTracker
-from .scoring import LLMScorer
 from .security import AuthContext, create_access_token
 from .ai_player import ai_take_turn
 from . import ws_manager
+from .scoring import score_answer
 
 logger = logging.getLogger("duoeng.game")
 
@@ -86,7 +86,7 @@ def pick_next_word(room_code: str) -> dict:
 
 
 class GameService:
-    def __init__(self, scorer: LLMScorer) -> None:
+    def __init__(self, scorer) -> None:
         self.scorer = scorer
         self.submit_limiter = SlidingWindowLimiter()
         self.ws_message_limiter = SlidingWindowLimiter()
@@ -952,10 +952,8 @@ class GameService:
                 "response_time": elapsed,
             }
 
-        # Use description-based scoring: the player describes/translates the Ukrainian word in English
-        scoring = await self.scorer.score_description(
-            turn_snapshot["correct_answer"], answer, ua_word=turn_snapshot["ua_word"]
-        )
+        # Use instant local scoring
+        score = score_answer(answer, turn_snapshot["correct_answer"])
 
         with get_db() as session:
             self._ensure_not_banned(session, player_id, ip)
@@ -1004,9 +1002,9 @@ class GameService:
                     "ua_word": turn_snapshot["ua_word"],
                     "correct_answer": turn_snapshot["correct_answer"],
                     "user_answer": answer,
-                    "score_awarded": scoring.score,
+                    "score_awarded": score,
                     "response_time": float(turn_snapshot["response_time"]),
-                    "scoring_source": scoring.source,
+                    "scoring_source": "local",
                     "is_timeout": False,
                     "created_at": _utc_now(),
                 },
@@ -1036,7 +1034,7 @@ class GameService:
                     WHERE room_code = :room_code AND player_id = :player_id
                     """
                 ),
-                {"points": scoring.score, "room_code": normalized_code, "player_id": player_id},
+                {"points": score, "room_code": normalized_code, "player_id": player_id},
             )
 
             updated_score = int(
@@ -1053,69 +1051,27 @@ class GameService:
 
             game_over = updated_score >= int(room["target_score"])
             winner_id: Optional[str] = None
-            second_chance = False
-            second_chance_player_id: Optional[str] = None
+            # Remove second chance logic
 
             if game_over:
                 winner_id = player_id
                 self._finish_match(session, room, winner_id)
-            elif scoring.score == 0:
-                # FEATURE 7: Second chance — opponent gets 10s to steal
-                other_id = self._other_player_id(session, normalized_code, player_id)
-                from .ai_player import is_ai_player
-                if other_id and not is_ai_player(other_id):
-                    second_chance = True
-                    second_chance_player_id = other_id
-                    # Set second_chance fields on room
-                    expires_at = _utc_now() + timedelta(seconds=10)
-                    session.execute(
-                        text(
-                            """
-                            UPDATE rooms
-                            SET second_chance_player = :sc_player,
-                                second_chance_expires = :sc_expires
-                            WHERE code = :code
-                            """
-                        ),
-                        {
-                            "sc_player": other_id,
-                            "sc_expires": expires_at,
-                            "code": normalized_code,
-                        },
-                    )
-                    # Don't advance turn yet — wait for second chance
-                else:
-                    self._advance_turn(session, room, player_id)
             else:
-                # Clear any second chance state
-                session.execute(
-                    text(
-                        """
-                        UPDATE rooms
-                        SET second_chance_player = NULL,
-                            second_chance_expires = NULL
-                        WHERE code = :code
-                        """
-                    ),
-                    {"code": normalized_code},
-                )
                 self._advance_turn(session, room, player_id)
 
             result = {
                 "room_code": normalized_code,
                 "turn_number": int(room["turn_number"]),
-                "points": scoring.score,
-                "scoring_source": scoring.source,
-                "feedback": "exact" if scoring.score >= 2 else "correct" if scoring.score >= 1 else "wrong",
+                "points": score,
+                "scoring_source": "local",
+                "feedback": "exact" if score >= 2 else "correct" if score >= 1 else "wrong",
                 "correct_answer": turn_snapshot["correct_answer"],
                 "game_over": game_over,
                 "winner_id": winner_id,
-                "second_chance": second_chance,
-                "second_chance_player_id": second_chance_player_id,
             }
 
         # After releasing the DB session, trigger AI auto-move if it's now AI's turn
-        if not game_over and not second_chance:
+        if not game_over:
             ai_diff = self._ai_rooms.get(normalized_code)
             if ai_diff:
                 asyncio.ensure_future(self._trigger_ai_move(normalized_code, ai_diff))
