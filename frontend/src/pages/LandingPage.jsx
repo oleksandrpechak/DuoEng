@@ -38,6 +38,22 @@ export default function LandingPage() {
   const [myGamesCount, setMyGamesCount] = useState(null);
   const [isSignedIn, setIsSignedIn] = useState(() => !!sessionStorage.getItem("accessToken"));
 
+  const loginAsGuest = async (nickname) => {
+  const res = await fetch(`${API_URL}/api/auth/guest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nickname })
+  })
+  const data = await res.json()
+  console.log('Login response:', data) // add this to see what's returned
+  
+  // Make sure ALL of these are saved:
+  localStorage.setItem('token', data.access_token)
+  localStorage.setItem('access_token', data.access_token)
+  localStorage.setItem('player_id', data.player_id)
+  localStorage.setItem('nickname', data.nickname)
+}
+
   // Navigation guard: redirect to /me if already signed in
   useEffect(() => {
     const hasOAuthParams = searchParams.get("access_token") && searchParams.get("user_id");
