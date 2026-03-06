@@ -207,7 +207,8 @@ export default function LandingPage() {
       toast.error("Please enter a nickname (2+ characters)");
       return null;
     }
-    const trimmed = nickname.trim();
+    // Max 19 chars, safely under 20
+    const trimmed = nickname.trim().slice(0, 19);
     try {
       const response = await api.post("/auth/guest", { nickname: trimmed });
       const data = response.data;
