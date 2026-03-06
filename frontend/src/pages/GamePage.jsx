@@ -23,7 +23,7 @@ export default function GamePage() {
   const navigate = useNavigate();
   const { code } = useParams();
   const [gameState, setGameState] = useState(null);
-  const [answer, setAnswer] = useState("");
+  const [answer, setAnswer] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastFeedback, setLastFeedback] = useState(null);
   const [isPaused, setIsPaused] = useState(false);
@@ -182,7 +182,12 @@ export default function GamePage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!answer.trim() || isSubmitting) return;
-
+    // Clear input immediately
+    setAnswer('');
+    if (inputRef.current) {
+      inputRef.current.value = '';
+      inputRef.current.focus();
+    }
     setIsSubmitting(true);
     try {
       const response = await api.post(`/rooms/${code}/turn`, {
@@ -235,6 +240,16 @@ export default function GamePage() {
     }
     setIsSubmitting(false);
   };
+
+  useEffect(() => {
+    if (gameState?.current_turn) {
+      setAnswer('');
+      if (inputRef.current) {
+        inputRef.current.value = '';
+        inputRef.current.focus();
+      }
+    }
+  }, [gameState?.current_turn]);
 
   if (!gameState) {
     return (

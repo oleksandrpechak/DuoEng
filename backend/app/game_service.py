@@ -7,6 +7,7 @@ import secrets
 import string
 from typing import Any, Mapping, Optional
 import uuid
+import random
 
 from fastapi import HTTPException
 from sqlalchemy import text
@@ -38,6 +39,48 @@ def _parse_dt(value: datetime | str | None) -> Optional[datetime]:
 def generate_room_code(length: int = 8) -> str:
     alphabet = string.ascii_uppercase + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+# In-memory word cache
+_word_cache: dict[str, list] = {}
+
+
+def _get_cached_words(level: str) -> list:
+    """Load words for a level into memory cache."""
+    if level not in _word_cache or len(_word_cache[level]) < 10:
+        with get_db() as session:
+            rows = session.execute(
+                text(
+                    """
+                SELECT id, ua, en, level FROM words
+                WHERE level = :level
+                ORDER BY RANDOM()
+                LIMIT 200
+            """
+                ),
+                {"level": level},
+            ).mappings().all()
+            _word_cache[level] = [dict(r) for r in rows]
+    return _word_cache[level]
+
+
+def pick_next_word(room_code: str) -> dict:
+    # Fetch room and level
+    with get_db() as session:
+        room = session.execute(
+            text("SELECT word_level FROM rooms WHERE code = :code"),
+            {"code": room_code},
+        ).mappings().first()
+        level = room["word_level"] if room and room["word_level"] else "B1"
+    words = _get_cached_words(level)
+    if not words:
+        with get_db() as session:
+            row = session.execute(
+                text("SELECT id, ua, en, level FROM words ORDER BY RANDOM() LIMIT 1")
+            ).mappings().first()
+            return dict(row)
+    word = words.pop(random.randint(0, len(words) - 1))
+    return word
 
 
 class GameService:
@@ -1860,3 +1903,28 @@ class GameService:
                 "created_at": created_at,
             })
         return results
+
+    async def handle_answer_submission(room_code, player_id, answer, broadcast_fn):
+        # Fetch current word
+        with get_db() as session:
+            room = session.execute(text("SELECT current_word_en, current_word_ua FROM rooms WHERE code = :code"), {"code": room_code}).mappings().first()
+            current_word = {"en": room["current_word_en"], "ua": room["current_word_ua"]} if room else {"en": "", "ua": ""}
+        # Run scoring AND next word fetch in parallel
+        from .scoring import score_answer
+        score_task = asyncio.create_task(score_answer(answer, current_word["en"], current_word["ua"]))
+        next_word_task = asyncio.create_task(pick_next_word(room_code))
+        score, next_word = await asyncio.gather(score_task, next_word_task)
+        # Broadcast result + next word
+        await broadcast_fn(room_code, {
+            "type": "turn_result",
+            "player_id": player_id,
+            "answer": answer,
+            "score": score,
+            "correct_answer": current_word["en"],
+            "next_word": next_word["ua"],
+        })
+        # Update room state
+        with get_db() as session:
+            session.execute(text("""
+            UPDATE rooms SET current_word_en = :en, current_word_ua = :ua WHERE code = :code
+        """), {"en": next_word["en"], "ua": next_word["ua"], "code": room_code})

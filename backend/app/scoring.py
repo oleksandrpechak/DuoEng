@@ -482,3 +482,35 @@ class LLMScorer:
         fallback = self._semantic_lite(correct_answer, user_answer)
         self._store_cached(key, fallback)
         return fallback
+
+    async def score_answer(player_answer: str, correct_word: str, ua_word: str) -> int:
+        answer = player_answer.strip().lower()
+        correct = correct_word.strip().lower()
+        word_count = len(answer.split())
+        if answer == correct:
+            return 2
+        ratio = SequenceMatcher(None, answer, correct).ratio()
+        if ratio >= 0.80:
+            return 2
+        if ratio >= 0.60:
+            return 1
+        if word_count <= 2:
+            return 0
+        # Only call LLM for descriptions (3+ words)
+        try:
+            result = await asyncio.wait_for(
+                check_description_with_ai(answer, correct_word, ua_word),
+                timeout=3.0
+            )
+            return 1 if result else 0
+        except asyncio.TimeoutError:
+            return 0
+        except Exception:
+            return 0
+
+async def check_description_with_ai(answer: str, correct_word: str, ua_word: str) -> bool:
+    # Fallback to LLMScorer._call_llm_describe or similar
+    from .scoring import LLMScorer
+    scorer = LLMScorer()
+    result = await scorer._call_llm_describe(correct_word, answer, ua_word)
+    return result is not None and result.score > 0
