@@ -1051,7 +1051,7 @@ class GameService:
 
             game_over = updated_score >= int(room["target_score"])
             winner_id: Optional[str] = None
-            # Remove second chance logic
+            # Remove second chance logicf
 
             if game_over:
                 winner_id = player_id
