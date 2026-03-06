@@ -81,6 +81,38 @@ export default function LandingPage() {
     }
   }
 
+  const handleGuestLogin = async () => {
+    if (!nickname.trim()) {
+      alert('Please enter a nickname')
+      return
+    }
+
+    const res = await fetch(
+      `${API_URL}/api/auth/guest`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: nickname.trim() })
+      }
+    )
+
+    const data = await res.json()
+
+    // Save to localStorage (persists across tabs/refreshes)
+    localStorage.setItem('token', data.access_token)
+    localStorage.setItem('access_token', data.access_token)
+    localStorage.setItem('player_id', data.player_id)
+    localStorage.setItem('nickname', data.nickname)
+
+    // Remove from sessionStorage if it was there before
+    sessionStorage.removeItem('nickname')
+    sessionStorage.removeItem('accessToken')
+    sessionStorage.removeItem('userId')
+    sessionStorage.removeItem('authType')
+
+    navigate('/') // or wherever after login
+  }
+
   // Navigation guard: redirect to /me if already signed in
   useEffect(() => {
     const hasOAuthParams = searchParams.get("access_token") && searchParams.get("user_id");
