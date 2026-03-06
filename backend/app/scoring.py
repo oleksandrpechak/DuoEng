@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 import hashlib
 import logging
 import re
+import time
 from typing import Optional
 
 try:
@@ -484,28 +485,38 @@ class LLMScorer:
         return fallback
 
     async def score_answer(player_answer: str, correct_word: str, ua_word: str) -> int:
+        t0 = time.time()
         answer = player_answer.strip().lower()
         correct = correct_word.strip().lower()
         word_count = len(answer.split())
+        logger.info(f"SCORING: '{answer}' vs '{correct}' ({word_count} words)")
+        # Exact match
         if answer == correct:
+            logger.info(f"SCORING: exact match in {time.time()-t0:.3f}s")
             return 2
-        ratio = SequenceMatcher(None, answer, correct).ratio()
+        import difflib
+        ratio = difflib.SequenceMatcher(None, answer, correct).ratio()
         if ratio >= 0.80:
+            logger.info(f"SCORING: similarity {ratio:.2f} in {time.time()-t0:.3f}s")
             return 2
         if ratio >= 0.60:
             return 1
         if word_count <= 2:
+            logger.info(f"SCORING: short answer, skipping LLM in {time.time()-t0:.3f}s")
             return 0
-        # Only call LLM for descriptions (3+ words)
+        logger.info(f"SCORING: calling LLM for description...")
         try:
             result = await asyncio.wait_for(
                 check_description_with_ai(answer, correct_word, ua_word),
                 timeout=3.0
             )
+            logger.info(f"SCORING: LLM done in {time.time()-t0:.3f}s → {result}")
             return 1 if result else 0
         except asyncio.TimeoutError:
+            logger.warning(f"SCORING: LLM timeout after {time.time()-t0:.3f}s")
             return 0
         except Exception:
+            logger.exception("SCORING: unexpected error")
             return 0
 
 async def check_description_with_ai(answer: str, correct_word: str, ua_word: str) -> bool:
