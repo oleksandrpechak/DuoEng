@@ -172,12 +172,20 @@ async def startup_event() -> None:
     )
 
 
+def _build_cors_origins():
+    # Return a list of allowed origins for CORS.
+    # You can customize this as needed, e.g., from settings or environment.
+    if hasattr(settings, "cors_origins") and settings.cors_origins:
+        return settings.cors_origins
+    return ["*"] if not settings.is_production else []
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=_build_cors_origins(),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 
