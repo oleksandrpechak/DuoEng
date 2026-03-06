@@ -86,8 +86,7 @@ def pick_next_word(room_code: str) -> dict:
 
 
 class GameService:
-    def __init__(self, scorer) -> None:
-        self.scorer = scorer
+    def __init__(self) -> None:
         self.submit_limiter = SlidingWindowLimiter()
         self.ws_message_limiter = SlidingWindowLimiter()
         self.join_fail_tracker = ViolationTracker()

@@ -15,7 +15,7 @@ from sqlalchemy import text
 from starlette.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .db import check_db_connection, clear_expired_llm_cache, get_db, init_db, seed_from_dmklinger
+from .db import check_db_connection, get_db, init_db, seed_from_dmklinger
 from .game_service import GameService
 from .logging_utils import configure_logging
 from .metrics import CONTENT_TYPE_LATEST, REQUESTS_TOTAL, generate_latest
@@ -44,7 +44,6 @@ from .schemas import (
     SubmitAnswerRequest,
     WrongWordItem,
 )
-from .scoring import LLMScorer
 from .security import AuthContext, auth_context_from_header, decode_token
 from .ws_manager import ConnectionManager
 
@@ -67,8 +66,7 @@ app = FastAPI(
 )
 api_router = APIRouter(prefix="/api")
 
-scorer = LLMScorer()
-service = GameService(scorer=scorer)
+service = GameService()
 ws_manager = ConnectionManager()
 http_rate_limiter = SlidingWindowLimiter()
 
@@ -161,7 +159,7 @@ async def startup_event() -> None:
     seed_thread = threading.Thread(target=_background_seed, daemon=True)
     seed_thread.start()
 
-    clear_expired_llm_cache()
+
     logger.info(
         "Backend startup complete — server ready (seeding continues in background)",
         extra={
