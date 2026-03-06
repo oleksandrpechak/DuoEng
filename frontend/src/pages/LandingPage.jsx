@@ -175,14 +175,19 @@ export default function LandingPage() {
       if (mode === "vs_ai") {
         body.ai_difficulty = aiDifficulty;
       }
+      console.log("Creating room with body:", body);
       const response = await api.post("/rooms", body);
+      console.log("Room creation response:", response);
       toast.success("Room created!");
       if (mode === "vs_ai") {
+        console.log("Navigating to /game/" + response.data.code, response.data);
         navigate(`/game/${response.data.code}`);
       } else {
+        console.log("Navigating to /lobby/" + response.data.code, response.data);
         navigate(`/lobby/${response.data.code}`);
       }
     } catch (error) {
+      console.error("Room creation error:", error, error?.response?.data);
       toast.error(error.response?.data?.detail || "Failed to create room");
     }
     setIsLoading(false);
