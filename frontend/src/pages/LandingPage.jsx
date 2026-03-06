@@ -52,7 +52,7 @@ export default function LandingPage() {
       alert('Please enter a nickname (2+ characters)')
       return
     }
-    const trimmed = nickname.trim()
+    const trimmed = nickname.trim().slice(0, 19)
     try {
       const res = await fetch(`${API_URL}/api/auth/guest`, {
         method: 'POST',
