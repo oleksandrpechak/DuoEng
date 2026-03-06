@@ -99,10 +99,10 @@ export default function LandingPage() {
     const data = await res.json()
 
     // Save to localStorage (persists across tabs/refreshes)
-    localStorage.setItem('token', data.access_token)
-    localStorage.setItem('access_token', data.access_token)
-    localStorage.setItem('player_id', data.player_id)
-    localStorage.setItem('nickname', data.nickname)
+    localStorage.setItem('accessToken', token)
+    localStorage.setItem('userId', playerId)
+    localStorage.setItem('nickname', playerNickname)
+    localStorage.setItem('authType', 'guest')
 
     // Remove from localStorage if it was there before
     localStorage.removeItem('nickname')
