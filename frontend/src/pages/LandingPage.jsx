@@ -190,13 +190,14 @@ export default function LandingPage() {
     }
 
     if (token && userId && nick) {
+      const safenick = nick.trim().slice(0, 19); // max 19 chars
       localStorage.setItem("accessToken", token);
       localStorage.setItem("userId", userId);
-      localStorage.setItem("nickname", nick);
+      localStorage.setItem("nickname", safenick);
       localStorage.setItem("authType", "google");
-      setNickname(nick);
+      setNickname(safenick);
       setIsSignedIn(true);
-      toast.success(`Signed in as ${nick}`);
+      toast.success(`Signed in as ${safenick}`);
       window.history.replaceState({}, document.title, "/");
       navigate("/me");
     }

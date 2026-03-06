@@ -151,8 +151,8 @@ async def google_callback(code: str = None, error: str = None):
             else:
                 # Create new player
                 player_id = str(uuid.uuid4())
-                # Make nickname unique
-                base_name = name[:16].strip() or "Player"
+                # Make nickname unique and short (max 19 chars)
+                base_name = (name[:16].strip() or "Player")[:16]
                 nickname = base_name
                 attempt = 0
                 while True:
@@ -163,9 +163,9 @@ async def google_callback(code: str = None, error: str = None):
                     if not existing:
                         break
                     attempt += 1
-                    nickname = f"{base_name}{secrets.randbelow(9000) + 1000}"
+                    nickname = f"{base_name}{secrets.randbelow(9000) + 1000}"[:19]
                     if attempt > 20:
-                        nickname = f"User{secrets.randbelow(90000) + 10000}"
+                        nickname = f"User{secrets.randbelow(90000) + 10000}"[:19]
                         break
 
                 from datetime import datetime, timezone
