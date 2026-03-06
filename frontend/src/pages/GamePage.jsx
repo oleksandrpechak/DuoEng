@@ -38,6 +38,7 @@ export default function GamePage() {
   const [isSecondChanceSubmitting, setIsSecondChanceSubmitting] = useState(false);
   const inputRef = useRef(null);
   const wsRef = useRef(null);
+  const currentWordRef = useRef(null);
 
   const userId = sessionStorage.getItem("userId");
   const accessToken = sessionStorage.getItem("accessToken");
@@ -76,11 +77,18 @@ export default function GamePage() {
             setGameState(msg.state || msg);
             break;
           case 'new_word':
-          case 'word_changed':
-            setGameState((prev) => ({ ...prev, current_turn: { ...prev.current_turn, word_ua: msg.word } }));
-            setAnswer('');
-            inputRef.current?.focus();
+          case 'word_changed': {
+            const newWord = msg.word || msg.current_word;
+            if (newWord && newWord !== currentWordRef.current) {
+              currentWordRef.current = newWord;
+              setGameState((prev) => ({ ...prev, current_turn: { ...prev.current_turn, word_ua: newWord } }));
+              setAnswer('');
+              inputRef.current?.focus();
+            } else {
+              setGameState((prev) => ({ ...prev, current_turn: { ...prev.current_turn, word_ua: newWord } }));
+            }
             break;
+          }
           case 'turn_result':
           case 'answer_result':
             setLastFeedback({
@@ -103,6 +111,27 @@ export default function GamePage() {
             break;
           case 'ping':
             socket.send(JSON.stringify({ type: 'pong' }));
+            break;
+          case 'ai_turn_result':
+            // Update AI score display instantly
+            setGameState(prev => {
+              if (!prev) return prev;
+              const updatedPlayers = prev.players.map(p =>
+                p.user_id === msg.player_id
+                  ? { ...p, score: (p.score || 0) + msg.score }
+                  : p
+              );
+              return { ...prev, players: updatedPlayers };
+            });
+            setLastFeedback({
+              player_nickname: msg.player_id,
+              answer: msg.answer,
+              points: msg.score,
+              correct_en: msg.correct_answer,
+              scoring_source: 'ai',
+              status: msg.score > 0 ? 'completed' : 'wrong',
+              word_ua: '',
+            });
             break;
         }
       } catch (e) {
@@ -184,16 +213,6 @@ export default function GamePage() {
       answer: submittedAnswer,
     }));
   };
-
-  useEffect(() => {
-    if (gameState?.current_turn) {
-      setAnswer('');
-      if (inputRef.current) {
-        inputRef.current.value = '';
-        inputRef.current.focus();
-      }
-    }
-  }, [gameState?.current_turn]);
 
   if (!gameState) {
     return (

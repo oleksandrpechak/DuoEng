@@ -42,6 +42,12 @@ AI_CONFIG = {
     "hard":   {"correct_rate": 0.85, "partial_rate": 0.10},
 }
 
+AI_CORRECT_RATES = {
+    "easy":   0.35,
+    "medium": 0.65,
+    "hard":   0.90,
+}
+
 
 def ensure_ai_players_exist() -> None:
     """Create AI player rows in the DB if they don't exist. Called at startup."""
@@ -208,6 +214,52 @@ async def take_ai_turn(
         "score": score,
         "correct_answer": correct_en,
     })
+
+
+async def ai_take_turn(
+    room_code: str,
+    current_word: dict,
+    difficulty: str,
+    broadcast_fn,
+    update_score_fn,
+) -> None:
+    """
+    AI instantly scores based on difficulty.
+    No API calls, no typing simulation.
+    """
+    correct_rate = AI_CORRECT_RATES.get(difficulty, 0.65)
+    roll = random.random()
+    
+    if roll < correct_rate:
+        score = 2
+        answer = current_word.get("en", "")
+    elif roll < correct_rate + 0.15:
+        score = 1
+        answer = current_word.get("en", "")[::-1]  # reversed as "wrong"
+    else:
+        score = 0
+        answer = "..."
+    
+    # No delay — instant scoring
+    # Update score in database
+    await update_score_fn(
+        room_code=room_code,
+        player_id=f"ai_{difficulty}",
+        score=score,
+        word=current_word,
+        answer=answer,
+    )
+    
+    # Broadcast AI result to frontend
+    await broadcast_fn(room_code, {
+        "type": "ai_turn_result",
+        "player_id": f"ai_{difficulty}",
+        "score": score,
+        "correct_answer": current_word.get("en", ""),
+        "answer": answer,
+    })
+    
+    logger.info(f"AI ({difficulty}) scored {score} on word '{current_word.get('en')}'")
 
 
 def is_ai_player(player_id: str) -> bool:

@@ -20,6 +20,8 @@ from .elo import expected_score, update_elo
 from .rate_limit import SlidingWindowLimiter, ViolationTracker
 from .scoring import LLMScorer
 from .security import AuthContext, create_access_token
+from .ai_player import ai_take_turn
+from . import ws_manager
 
 logger = logging.getLogger("duoeng.game")
 
@@ -1641,32 +1643,29 @@ class GameService:
 
     # ---------- AI auto-move (Feature 8) ----------
     async def _trigger_ai_move(self, room_code: str, difficulty: str) -> None:
-        """Auto-trigger an AI move after a small delay."""
-        from .ai_player import make_ai_move, is_ai_player
-
+        """Trigger instant AI move and scoring."""
         try:
             with get_db() as session:
                 room = self._fetch_room(session, room_code)
                 if not room or room["status"] != "playing":
                     return
                 current_turn = room["current_turn"]
-                if not current_turn or not is_ai_player(current_turn):
+                if not current_turn:
                     return
                 ua_word = room["current_word_ua"] or ""
                 en_word = room["current_word_en"] or ""
-
-            ai_answer = await make_ai_move(ua_word, en_word, difficulty)
-
-            # Submit the AI's answer through the normal pipeline
-            await self.submit_answer(
+                word_id = room.get("current_word_id") or ""
+                word = {"ua": ua_word, "en": en_word, "id": word_id}
+            # Use ws_manager.broadcast for broadcasting
+            await ai_take_turn(
                 room_code=room_code,
-                player_id=current_turn,
-                answer=ai_answer,
-                ip="ai",
-                channel="ai",
+                current_word=word,
+                difficulty=difficulty,
+                broadcast_fn=ws_manager.broadcast,
+                update_score_fn=self.update_player_score,
             )
         except Exception:
-            logger.exception("AI auto-move failed", extra={"event": "ai_move_failed", "room_code": room_code})
+            logger.exception("AI instant move failed", extra={"event": "ai_move_failed", "room_code": room_code})
 
     # ---------- Second chance submit (Feature 7) ----------
     async def submit_second_chance(
@@ -1928,3 +1927,32 @@ class GameService:
             session.execute(text("""
             UPDATE rooms SET current_word_en = :en, current_word_ua = :ua WHERE code = :code
         """), {"en": next_word["en"], "ua": next_word["ua"], "code": room_code})
+
+    async def update_player_score(room_code: str, player_id: str, score: int, word: dict, answer: str) -> None:
+        """Update score in rooms table and record the move."""
+        if score == 0:
+            return  # nothing to update
+        from sqlalchemy import text
+        from .db import get_db
+        with get_db() as session:
+            # Update room score for this player
+            room = session.execute(
+                text("SELECT * FROM rooms WHERE code = :code"),
+                {"code": room_code}
+            ).mappings().first()
+            if not room:
+                return
+            # Find which score column to update (player1 or player2)
+            if str(room["player1_id"]) == str(player_id):
+                session.execute(text("""
+                    UPDATE rooms 
+                    SET score1 = score1 + :score 
+                    WHERE code = :code
+                """), {"score": score, "code": room_code})
+            else:
+                session.execute(text("""
+                    UPDATE rooms 
+                    SET score2 = score2 + :score 
+                    WHERE code = :code
+                """), {"score": score, "code": room_code})
+            # Optionally: record the move in moves table if needed
