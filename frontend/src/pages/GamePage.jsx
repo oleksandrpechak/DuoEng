@@ -36,6 +36,7 @@ export default function GamePage() {
   const [secondChance, setSecondChance] = useState(null); // { word_ua, word_en, expires_in }
   const [secondChanceAnswer, setSecondChanceAnswer] = useState("");
   const [isSecondChanceSubmitting, setIsSecondChanceSubmitting] = useState(false);
+  
   const inputRef = useRef(null);
   const wsRef = useRef(null);
   const currentWordRef = useRef(null);
@@ -63,7 +64,6 @@ export default function GamePage() {
     if (!token || !code) return;
     const wsUrl = `${WS_URL}/ws/rooms/${code}?token=${token}`;
     const socket = new WebSocket(wsUrl);
-    setWs(socket);
     wsRef.current = socket;
     socket.onopen = () => {
       console.log('WebSocket connected');
@@ -139,7 +139,6 @@ export default function GamePage() {
       }
     };
     socket.onclose = () => {
-      setWs(null);
       wsRef.current = null;
       console.log('WebSocket disconnected');
     };
