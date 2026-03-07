@@ -83,7 +83,6 @@ export default function LandingPage() {
       localStorage.setItem('nickname', playerNickname)
       localStorage.setItem('authType', 'guest')
       setIsSignedIn(true)
-      if (setAuth) setAuth({ token, playerId, nickname: playerNickname })
       navigate('/')
     } catch (err) {
       console.error('Guest login error:', err)
@@ -229,7 +228,6 @@ export default function LandingPage() {
       localStorage.setItem("nickname", playerNickname);
       localStorage.setItem("authType", "guest");
       setIsSignedIn(true);
-      if (setAuth) setAuth({ token, playerId, nickname: playerNickname });
       return playerId;
     } catch (error) {
       console.error('Auth error:', error)
