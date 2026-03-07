@@ -232,8 +232,8 @@ export default function LandingPage() {
       if (setAuth) setAuth({ token, playerId, nickname: playerNickname });
       return playerId;
     } catch (error) {
-      toast.error("Failed to create user");
-      return null;
+      console.error('Auth error:', error)
+  toast.error(error?.response?.data?.detail || "Login failed. Please try again.")
     }
   };
 
