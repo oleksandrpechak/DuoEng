@@ -1,33 +1,40 @@
 # DuoEng — Multiplayer Vocabulary Duel
 
-A real-time two-player English vocabulary game where players take turns describing words and an AI judge scores their answers.
+A real-time two-player English vocabulary game where players take turns translating Ukrainian words into English. Play against a friend or challenge an AI opponent with configurable difficulty.
 
 ## How It Works
 
-1. **Create or join a room** — pick a CEFR difficulty level (A1–C2) and share the room link
-2. **Describe the word** — each turn shows an English word; type a description of its meaning
-3. **AI scores your answer** — Gemini 2.0 Flash judges whether the description is correct (+1 point) or not (0 points)
+1. **Create or join a room** — pick a CEFR difficulty level (A1–C2), choose vs-human or vs-AI mode, and share the room link
+2. **Translate the word** — each turn shows a Ukrainian word; type the English translation, a close synonym, or a description
+3. **Instant scoring** — answers are scored locally in under 50ms: exact match → 2 pts, close/partial → 1 pt, wrong → 0 pts
 4. **First to target score wins** — ELO ratings update after each match
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| **Backend** | Python 3.11+, FastAPI, SQLAlchemy (async), Alembic |
+| **Backend** | Python 3.11+, FastAPI, SQLAlchemy, Alembic |
 | **Frontend** | React 19, Tailwind CSS, Radix UI, React Router 7 |
 | **Database** | PostgreSQL (production), SQLite (development) |
-| **AI Scoring** | Google Gemini 2.0 Flash via Vertex AI |
+| **Scoring** | Instant local scoring (difflib similarity + substring matching) |
+| **AI Opponent** | Configurable difficulty (easy/medium/hard), instant probabilistic moves |
 | **Auth** | JWT (guest sessions + Google OAuth) |
 | **Deployment** | Render (backend web service + frontend static site) |
 
 ## Features
 
-- **Real-time gameplay** — WebSocket room updates with HTTP polling fallback
-- **AI-powered scoring** — LLM judges descriptions with 4s timeout, caching, and keyword fallback
+- **Real-time gameplay** — WebSocket room updates with HTTP polling fallback; all responses under 2 seconds
+- **Instant local scoring** — no LLM dependency; uses sequence matching, typo tolerance, substring matching, and description detection
+- **vs-AI mode** — play against an AI opponent (easy/medium/hard) that responds instantly with difficulty-tuned accuracy
 - **CEFR difficulty levels** — A1 (Beginner) through C2 (Mastery) word selection per room
+- **Flexible answer support** — exact translations, close spellings, synonyms, and multi-word descriptions all earn points
 - **ELO rating system** — persistent player rankings with K-factor 32
 - **Leaderboard** — filterable by Today / This Week / All Time
 - **Game history** — paginated match history with opponent info and scores
+- **Favourite words** — save and practice specific words
+- **Custom words** — add your own word pairs for practice
+- **Wrong words practice** — replay words you've gotten wrong
+- **Second chance / steal** — opponent can steal points on a wrong answer
 - **Google Sign-In** — OAuth 2.0 alongside guest access
 - **Room sharing** — shareable join links with copy/native share support
 - **Dictionary search** — English–Ukrainian word lookup with CEFR level filtering
@@ -40,19 +47,24 @@ A real-time two-player English vocabulary game where players take turns describi
 backend/
 ├── app/
 │   ├── main.py              # FastAPI app, routes, WebSocket handler, middleware
-│   ├── game_service.py      # Game logic (rooms, turns, scoring, ELO, history)
-│   ├── scoring.py           # LLM scoring (Gemini + fallback + cache)
+│   ├── game_service.py      # Game logic (rooms, turns, scoring, ELO, AI auto-move, history)
+│   ├── scoring.py           # Instant local scoring (difflib + substring + description matching)
+│   ├── ai_player.py         # AI opponent (difficulty-tuned probabilistic scoring, no delays)
 │   ├── models.py            # SQLAlchemy models (Player, Room, Match, Move, Word)
 │   ├── schemas.py           # Pydantic request/response schemas
 │   ├── config.py            # Settings from environment variables
 │   ├── security.py          # JWT token creation and verification
+│   ├── ws_manager.py        # WebSocket connection manager (rooms, broadcast, pause)
+│   ├── elo.py               # ELO rating calculation
+│   ├── rate_limit.py        # Sliding window rate limiter + violation tracking
 │   ├── routers/
+│   │   ├── ai.py            # AI text generation endpoint (Gemini)
 │   │   ├── oauth.py         # Google OAuth endpoints
 │   │   └── word_levels.py   # CEFR word classification endpoint
 │   └── services/
 │       └── gemini_service.py # Vertex AI / Gemini integration
 ├── alembic/                  # Database migrations
-├── tests/                    # Pytest test suite (19 tests)
+├── tests/                    # Pytest test suite (47 tests)
 ├── data/processed/           # Dictionary CSV data
 └── scripts/                  # Seed and data preparation scripts
 
@@ -62,7 +74,7 @@ frontend/
 │   ├── pages/
 │   │   ├── LandingPage.jsx  # Home: auth, create/join room, leaderboard, history, dictionary
 │   │   ├── LobbyPage.jsx    # Room lobby: settings display, link sharing, wait for opponent
-│   │   ├── GamePage.jsx     # Gameplay: word display, description input, timer, scoreboard
+│   │   ├── GamePage.jsx     # Gameplay: word display, answer input, timer, scoreboard, AI turns
 │   │   ├── EndPage.jsx      # Results: winner, final scores, play again
 │   │   └── JoinPage.jsx     # Auto-join from shared link
 │   ├── components/
@@ -78,14 +90,54 @@ frontend/
 | POST | `/api/auth/guest` | — | Create guest session, get JWT |
 | GET | `/api/auth/google` | — | Start Google OAuth flow |
 | GET | `/api/auth/google/callback` | — | Handle OAuth callback |
-| POST | `/api/rooms` | ✅ | Create room (mode, target score, CEFR level) |
+| POST | `/api/rooms` | ✅ | Create room (mode, target score, CEFR level, AI difficulty) |
 | POST | `/api/rooms/{code}/join` | ✅ | Join room |
 | GET | `/api/rooms/{code}/state` | ✅ | Get room state (polling fallback) |
-| POST | `/api/rooms/{code}/submit` | ✅ | Submit word description |
+| POST | `/api/rooms/{code}/submit` | ✅ | Submit word translation |
+| POST | `/api/rooms/{code}/leave` | ✅ | Leave room (forfeit) |
+| POST | `/api/rooms/{code}/second-chance` | ✅ | Submit second chance / steal answer |
 | GET | `/api/leaderboard` | — | Leaderboard (`?period=today\|week\|all`) |
+| GET | `/api/players/{id}/stats` | ✅ | Player stats |
 | GET | `/api/players/{id}/history` | ✅ | Paginated match history |
+| POST | `/api/players/{id}/nickname` | ✅ | Change nickname |
 | GET | `/api/dictionary/search` | ✅ | Dictionary search (`?q=&level=`) |
+| POST | `/api/favourites` | ✅ | Add favourite word |
+| GET | `/api/favourites` | ✅ | List favourite words |
+| DELETE | `/api/favourites/{word_id}` | ✅ | Remove favourite word |
+| POST | `/api/custom-words` | ✅ | Add custom word pair |
+| GET | `/api/custom-words` | ✅ | List custom words |
+| DELETE | `/api/custom-words/{id}` | ✅ | Delete custom word |
+| GET | `/api/wrong-words` | ✅ | Get words you've gotten wrong |
 | WS | `/ws/rooms/{code}` | ✅ | Real-time game state updates |
+
+## Scoring System
+
+All scoring is **instant and local** (no external API calls). Response times are consistently under 50ms.
+
+| Answer Quality | Points | Example |
+|---------------|--------|---------|
+| **Exact match** | 2 | "hello" for "hello" |
+| **High similarity** (ratio ≥ 0.75) | 2 | "helo" for "hello" (typo tolerance) |
+| **Medium similarity** (ratio ≥ 0.50) | 1 | Recognizable but imprecise |
+| **Substring match** (min 3 chars) | 1 | "run" for "running" |
+| **Description containing the word** | 1 | "a bright light" for "light" |
+| **Similar word in description** | 1 | Multi-word answer with a close match |
+| **Partial match on compound word** | 1 | "break" for "break down" |
+| **Wrong / unrelated** | 0 | "banana" for "computer" |
+
+## AI Opponent
+
+The **vs-AI** mode lets you play against an instant AI opponent. The AI:
+
+- Responds **immediately** — no delays, no DB lookups for wrong answers
+- Uses **probability-based scoring** tuned per difficulty level
+- Does **not check words** — it simulates realistic play with configurable accuracy
+
+| Difficulty | Correct (2 pts) | Partial (1 pt) | Wrong (0 pts) |
+|------------|:----------------:|:---------------:|:-------------:|
+| Easy | 35% | 15% | 50% |
+| Medium | 60% | 20% | 20% |
+| Hard | 85% | 10% | 5% |
 
 ## Setup
 
@@ -126,17 +178,25 @@ See [`backend/.env.example`](backend/.env.example) for the full list. Key variab
 | `SECRET_KEY` | ✅ | JWT signing key (min 32 chars in production) |
 | `DATABASE_URL` | ✅ | PostgreSQL connection string |
 | `FRONTEND_URL` | ✅ | Frontend origin for CORS and room links |
-| `GOOGLE_APPLICATION_CREDENTIALS` | — | Path to GCP service account JSON (for Gemini) |
+| `GOOGLE_APPLICATION_CREDENTIALS` | — | Path to GCP service account JSON (for Gemini AI text generation) |
 | `GOOGLE_CLIENT_ID` | — | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | — | Google OAuth client secret |
+
+> **Note:** Gemini credentials are only needed for the `/api/ai/generate` and `/api/v1/words/level` endpoints. Core game scoring and AI opponent work without any external API keys.
 
 ## Testing
 
 ```bash
 cd backend
 pip install -r requirements-dev.txt
-pytest -v                     # 19 tests: game flow, scoring, dictionary, AI, word levels
+pytest -v                     # 47 tests: scoring, AI, game flow, dictionary, word levels
 ```
+
+Test coverage includes:
+- **Scoring**: exact match, typo tolerance, case insensitivity, substring/superstring, descriptions, compound words, empty inputs, wrong answers
+- **AI opponent**: all difficulty levels, probability distributions, helper functions, fallback behavior
+- **Game flow**: room creation, join, turn validation, submit answer, ELO updates, leaderboard, vs-AI mode
+- **API**: dictionary search, word level classification, AI text generation, auth, error handling
 
 ## CI/CD
 

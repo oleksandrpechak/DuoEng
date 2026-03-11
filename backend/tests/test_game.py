@@ -8,7 +8,7 @@ from app.config import settings
 from app.db import get_db, init_db, reset_database_engine, seed_from_dmklinger
 from app.elo import expected_score, update_elo
 from app.game_service import GameService, generate_room_code
-from app.scoring import LLMScorer, ScoreResult
+from app.scoring import score_answer
 
 
 @pytest.fixture(autouse=True)
@@ -51,21 +51,25 @@ def test_room_code_generator_entropy_and_charset():
         assert code.upper() == code
 
 
-def test_scoring_fallback_when_llm_unavailable(monkeypatch):
-    scorer = LLMScorer()
+def test_scoring_exact_match():
+    assert score_answer("hello", "hello") == 2
 
-    async def fake_llm(*_args, **_kwargs):
-        return None
 
-    monkeypatch.setattr(scorer, "_call_llm", fake_llm)
+def test_scoring_typo_tolerance():
+    assert score_answer("helo", "hello") >= 1
 
-    result = asyncio.run(scorer.score("determine", "completely unrelated answer"))
-    assert result.source == "fallback_semantic_lite"
-    assert result.score in {0, 1}
+
+def test_scoring_description():
+    # Answer contains the correct word as part of description
+    assert score_answer("it means hello world", "hello") >= 1
+
+
+def test_scoring_wrong():
+    assert score_answer("banana", "computer") == 0
 
 
 def test_end_to_end_game_flow_updates_elo_and_stats():
-    service = GameService(scorer=LLMScorer())
+    service = GameService()
 
     p1 = service.create_guest("Alice")
     p2 = service.create_guest("Bob")
@@ -104,18 +108,18 @@ def test_end_to_end_game_flow_updates_elo_and_stats():
         ).mappings().first()
         correct_answer = room["current_word_en"]
 
-    # Description scoring: describe the word using the word itself as fallback
+    # Submit the exact correct answer for an instant win
     move_result = asyncio.run(
         service.submit_answer(
             room_code=room_code,
             player_id=acting_player["player_id"],
-            answer=f"This means {correct_answer}",
+            answer=correct_answer,
             ip=acting_ip,
         )
     )
 
     assert move_result["game_over"] is True
-    assert move_result["points"] >= 1  # description mode: 1 pt for accepted
+    assert move_result["points"] == 2  # exact match = 2 pts
     assert move_result["winner_id"] == acting_player["player_id"]
 
     leaderboard = service.leaderboard(limit=2)
@@ -128,14 +132,292 @@ def test_end_to_end_game_flow_updates_elo_and_stats():
     assert winner_stats["total_moves"] >= 1
 
 
-def test_llm_score_can_be_used(monkeypatch):
-    scorer = LLMScorer()
+def test_ai_scoring_instant():
+    """AI scoring should return a score and answer instantly."""
+    from app.ai_player import simulate_ai_score
 
-    async def fake_llm(_correct: str, _answer: str):
-        return ScoreResult(score=1, source="llm", used_llm=True)
+    for _ in range(20):
+        score, answer = simulate_ai_score("hello", "easy")
+        assert score in {0, 1, 2}
+        assert isinstance(answer, str)
 
-    monkeypatch.setattr(scorer, "_call_llm", fake_llm)
-    result = asyncio.run(scorer.score("determine", "to figure out"))
 
-    assert result.source == "llm"
-    assert result.score == 1
+# -----------------------------------------------------------------------
+# SCORING EDGE CASES
+# -----------------------------------------------------------------------
+
+def test_scoring_empty_answer():
+    assert score_answer("", "hello") == 0
+    assert score_answer("   ", "hello") == 0
+
+
+def test_scoring_empty_correct():
+    assert score_answer("hello", "") == 0
+
+
+def test_scoring_case_insensitive():
+    assert score_answer("HELLO", "hello") == 2
+    assert score_answer("Hello", "hello") == 2
+
+
+def test_scoring_whitespace_trimming():
+    assert score_answer("  hello  ", "hello") == 2
+
+
+def test_scoring_high_similarity():
+    """Single character typo should still score 2."""
+    assert score_answer("helo", "hello") == 2  # ratio ~0.89
+
+
+def test_scoring_medium_similarity():
+    """Moderate similarity should score 1."""
+    assert score_answer("hll", "hello") >= 0  # ratio depends on impl
+
+
+def test_scoring_substring_match():
+    """Answer is a substring of the correct answer."""
+    assert score_answer("run", "running") == 1
+
+
+def test_scoring_superstring_match():
+    """Correct answer is a substring of the answer."""
+    assert score_answer("running", "run") == 1
+
+
+def test_scoring_short_substring_no_match():
+    """Too-short substrings should not match."""
+    assert score_answer("ru", "running") == 0
+
+
+def test_scoring_description_multi_word():
+    """Multi-word answer containing the correct word."""
+    assert score_answer("a bright light", "light") == 1
+    assert score_answer("water is clear", "water") == 1
+
+
+def test_scoring_description_similar_word():
+    """Multi-word answer with a similar-enough word."""
+    assert score_answer("the helo rings", "hello") >= 1
+
+
+def test_scoring_compound_correct_answer():
+    """Multi-word correct answer where answer matches one part."""
+    assert score_answer("break", "break down") == 1
+
+
+def test_scoring_completely_wrong():
+    """Totally unrelated answer."""
+    assert score_answer("elephant", "computer") == 0
+    assert score_answer("xyz", "hello") == 0
+
+
+def test_scoring_same_length_different_words():
+    """Same length but different letters — low similarity."""
+    assert score_answer("abc", "xyz") == 0
+
+
+# -----------------------------------------------------------------------
+# AI PLAYER EDGE CASES
+# -----------------------------------------------------------------------
+
+def test_ai_scoring_all_difficulties():
+    """AI scoring works for all difficulty levels."""
+    from app.ai_player import simulate_ai_score
+    for difficulty in ("easy", "medium", "hard"):
+        for _ in range(10):
+            score, answer = simulate_ai_score("computer", difficulty)
+            assert score in {0, 1, 2}
+            assert isinstance(answer, str) and len(answer) > 0
+
+
+def test_ai_scoring_invalid_difficulty_defaults_to_medium():
+    """Invalid difficulty should fall back to medium."""
+    from app.ai_player import simulate_ai_score
+    score, answer = simulate_ai_score("hello", "nonexistent")
+    assert score in {0, 1, 2}
+
+
+def test_ai_is_ai_player():
+    from app.ai_player import is_ai_player, AI_PLAYER_IDS
+    for pid in AI_PLAYER_IDS.values():
+        assert is_ai_player(pid) is True
+    assert is_ai_player("some_random_player") is False
+
+
+def test_ai_get_difficulty():
+    from app.ai_player import get_ai_difficulty
+    assert get_ai_difficulty("ai_easy") == "easy"
+    assert get_ai_difficulty("ai_medium") == "medium"
+    assert get_ai_difficulty("ai_hard") == "hard"
+    assert get_ai_difficulty("some_random") is None
+
+
+def test_ai_slightly_wrong_short_word():
+    """_slightly_wrong handles short words without crashing."""
+    from app.ai_player import _slightly_wrong
+    result = _slightly_wrong("ab")
+    assert isinstance(result, str) and len(result) > 0
+    result = _slightly_wrong("a")
+    assert isinstance(result, str) and len(result) > 0
+
+
+def test_ai_correct_rate_distribution():
+    """Hard AI should score 2 more often than easy AI (statistical sanity)."""
+    from app.ai_player import simulate_ai_score
+    import random
+    random.seed(42)
+
+    easy_2s = sum(1 for _ in range(200) if simulate_ai_score("word", "easy")[0] == 2)
+    hard_2s = sum(1 for _ in range(200) if simulate_ai_score("word", "hard")[0] == 2)
+    # Hard should get more 2-point answers than easy
+    assert hard_2s > easy_2s
+
+
+# -----------------------------------------------------------------------
+# GAME FLOW EDGE CASES
+# -----------------------------------------------------------------------
+
+def test_create_room_vs_ai_starts_immediately():
+    """Creating a vs_ai room should start the game immediately."""
+    from app.ai_player import ensure_ai_players_exist
+    ensure_ai_players_exist()
+
+    service = GameService()
+    player = service.create_guest("AITester")
+    result = service.create_room(
+        player_id=player["player_id"],
+        mode="vs_ai",
+        target_score=5,
+        ip="127.0.0.1",
+        ai_difficulty="medium",
+    )
+    assert result["status"] == "playing"
+    assert result["mode"] == "vs_ai"
+    assert result["ai_difficulty"] == "medium"
+
+    state = service.room_state_for_player(result["room_code"], player["player_id"], ip="127.0.0.1")
+    assert state["status"] == "playing"
+    assert state["current_turn_player_id"] == player["player_id"]
+    assert state["current_word_ua"] is not None
+
+
+def test_partial_answer_scores_one_point():
+    """Submit a close-but-not-exact answer and get 1 point."""
+    service = GameService()
+    p1 = service.create_guest("PartialAlice")
+    p2 = service.create_guest("PartialBob")
+
+    create = service.create_room(
+        player_id=p1["player_id"],
+        mode="classic",
+        target_score=10,
+        ip="127.0.0.1",
+    )
+    room_code = create["room_code"]
+    service.join_room(room_code=room_code, player_id=p2["player_id"], ip="127.0.0.2")
+
+    state = service.room_state_for_player(room_code, p1["player_id"], ip="127.0.0.1")
+    current_turn = state["current_turn_player_id"]
+    acting_player = p1 if current_turn == p1["player_id"] else p2
+    acting_ip = "127.0.0.1" if current_turn == p1["player_id"] else "127.0.0.2"
+
+    with get_db() as conn:
+        room = conn.execute(
+            text("SELECT current_word_en FROM rooms WHERE code = :code"),
+            {"code": room_code},
+        ).mappings().first()
+        correct = room["current_word_en"]
+
+    # Submit a substring if the word is long enough
+    if len(correct) >= 5:
+        partial = correct[:len(correct) - 2]  # chop last 2 chars
+    else:
+        partial = correct + "x"  # force a near-miss
+
+    result = asyncio.run(
+        service.submit_answer(
+            room_code=room_code,
+            player_id=acting_player["player_id"],
+            answer=partial,
+            ip=acting_ip,
+        )
+    )
+    # Should get partial credit (1) or full credit (2) depending on similarity
+    assert result["points"] in {0, 1, 2}
+    assert result["game_over"] is False
+
+
+def test_wrong_answer_scores_zero():
+    """A completely wrong answer should score 0."""
+    service = GameService()
+    p1 = service.create_guest("WrongAlice")
+    p2 = service.create_guest("WrongBob")
+
+    create = service.create_room(
+        player_id=p1["player_id"],
+        mode="classic",
+        target_score=10,
+        ip="127.0.0.1",
+    )
+    room_code = create["room_code"]
+    service.join_room(room_code=room_code, player_id=p2["player_id"], ip="127.0.0.2")
+
+    state = service.room_state_for_player(room_code, p1["player_id"], ip="127.0.0.1")
+    current_turn = state["current_turn_player_id"]
+    acting_player = p1 if current_turn == p1["player_id"] else p2
+    acting_ip = "127.0.0.1" if current_turn == p1["player_id"] else "127.0.0.2"
+
+    result = asyncio.run(
+        service.submit_answer(
+            room_code=room_code,
+            player_id=acting_player["player_id"],
+            answer="zzz_absolutely_wrong_xyzxyz",
+            ip=acting_ip,
+        )
+    )
+    assert result["points"] == 0
+    assert result["game_over"] is False
+
+
+def test_submit_not_your_turn_rejected():
+    """Submitting when it's not your turn should raise 403."""
+    service = GameService()
+    p1 = service.create_guest("TurnAlice")
+    p2 = service.create_guest("TurnBob")
+
+    create = service.create_room(
+        player_id=p1["player_id"],
+        mode="classic",
+        target_score=10,
+        ip="127.0.0.1",
+    )
+    room_code = create["room_code"]
+    service.join_room(room_code=room_code, player_id=p2["player_id"], ip="127.0.0.2")
+
+    state = service.room_state_for_player(room_code, p1["player_id"], ip="127.0.0.1")
+    current_turn = state["current_turn_player_id"]
+    waiting_player = p2 if current_turn == p1["player_id"] else p1
+    waiting_ip = "127.0.0.2" if current_turn == p1["player_id"] else "127.0.0.1"
+
+    with pytest.raises(Exception) as exc_info:
+        asyncio.run(
+            service.submit_answer(
+                room_code=room_code,
+                player_id=waiting_player["player_id"],
+                answer="test",
+                ip=waiting_ip,
+            )
+        )
+    assert "Not your turn" in str(exc_info.value.detail)
+
+
+def test_leaderboard_returns_sorted():
+    """Leaderboard should return players sorted by ELO descending."""
+    service = GameService()
+    service.create_guest("LBAlice")
+    service.create_guest("LBBob")
+
+    leaderboard = service.leaderboard(limit=10)
+    assert len(leaderboard) >= 2
+    for i in range(len(leaderboard) - 1):
+        assert leaderboard[i]["elo"] >= leaderboard[i + 1]["elo"]

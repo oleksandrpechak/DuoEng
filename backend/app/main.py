@@ -70,6 +70,9 @@ service = GameService()
 ws_manager = ConnectionManager()
 http_rate_limiter = SlidingWindowLimiter()
 
+# Wire up broadcast function so GameService can broadcast AI results
+service.set_broadcast_fn(lambda room_code, payload: ws_manager.broadcast(room_code, payload))
+
 
 @app.on_event("startup")
 async def startup_event() -> None:
@@ -257,11 +260,16 @@ async def request_guard_middleware(request: Request, call_next):
         REQUESTS_TOTAL.labels(method=method, path=path, status="429").inc()
         return response
 
-    with get_db() as conn:
-        if service._is_banned(conn, "ip", ip):
-            response = JSONResponse(status_code=403, content={"detail": "IP temporarily banned"})
-            REQUESTS_TOTAL.labels(method=method, path=path, status="403").inc()
-            return response
+    # Skip per-request ban DB check for health/metrics endpoints to reduce latency
+    if path not in ("/health", "/metrics", "/api/health", "/api/stats"):
+        try:
+            with get_db() as conn:
+                if service._is_banned(conn, "ip", ip):
+                    response = JSONResponse(status_code=403, content={"detail": "IP temporarily banned"})
+                    REQUESTS_TOTAL.labels(method=method, path=path, status="403").inc()
+                    return response
+        except Exception:
+            pass  # Don't block requests if ban check fails
 
     response = await call_next(request)
     REQUESTS_TOTAL.labels(method=method, path=path, status=str(response.status_code)).inc()
@@ -835,10 +843,6 @@ async def websocket_room(websocket: WebSocket, room_code: str) -> None:
                 return service.room_state_for_player(target_room_code, target_player_id, ip="ws")
 
             await ws_manager.broadcast_room_state(room_code.upper(), _state_provider)
-            await ws_manager.broadcast(
-                room_code.upper(),
-                {"type": "leaderboard", "data": service.leaderboard(10, period="all")},
-            )
             await ws_manager.send_to_player(room_code.upper(), auth.player_id, {"type": "submit_ack", "data": result})
 
             # Broadcast second_chance info if applicable

@@ -72,9 +72,20 @@ export default function GamePage() {
       try {
         const msg = JSON.parse(event.data);
         switch (msg.type) {
+          case 'game_state':
+            if (msg.data?.status === 'finished') {
+              navigate(`/end/${code}`);
+              return;
+            }
+            setGameState(msg.data || msg);
+            break;
           case 'room_state':
           case 'state_update':
-            setGameState(msg.state || msg);
+            if ((msg.state || msg.data || msg)?.status === 'finished') {
+              navigate(`/end/${code}`);
+              return;
+            }
+            setGameState(msg.state || msg.data || msg);
             break;
           case 'new_word':
           case 'word_changed': {
@@ -103,7 +114,7 @@ export default function GamePage() {
             setGameState((prev) => ({ ...prev, players: msg.scores || prev.players }));
             break;
           case 'game_over':
-            // ...handle game over...
+            navigate(`/end/${code}`);
             break;
           case 'player_joined':
           case 'player_left':
@@ -114,6 +125,10 @@ export default function GamePage() {
             break;
           case 'ai_turn_result':
             // Update AI score display instantly
+            if (msg.game_over) {
+              navigate(`/end/${code}`);
+              break;
+            }
             setGameState(prev => {
               if (!prev) return prev;
               const updatedPlayers = prev.players.map(p =>
@@ -133,6 +148,24 @@ export default function GamePage() {
               word_ua: '',
             });
             break;
+          case 'submit_ack': {
+            const data = msg.data || msg;
+            if (data.game_over) {
+              navigate(`/end/${code}`);
+              break;
+            }
+            setLastFeedback({
+              player_nickname: 'You',
+              answer: data.answer || '',
+              points: data.points || 0,
+              correct_en: data.correct_answer || '',
+              scoring_source: data.scoring_source || 'local',
+              status: data.points > 0 ? 'completed' : 'wrong',
+              word_ua: '',
+            });
+            setIsSubmitting(false);
+            break;
+          }
         }
       } catch (e) {
         // ignore parse errors
@@ -190,7 +223,7 @@ export default function GamePage() {
       }
       setSecondChance(null);
       setSecondChanceAnswer("");
-      await fetchGameState();
+      // State will be refreshed via WebSocket game_state broadcast
     } catch (error) {
       toast.error(error.response?.data?.detail || "Failed to submit steal");
     }
@@ -200,7 +233,8 @@ export default function GamePage() {
   // Submit answer via WebSocket
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!answer.trim() || !ws) return;
+    const ws = wsRef.current;
+    if (!answer.trim() || !ws || ws.readyState !== WebSocket.OPEN) return;
     const submittedAnswer = answer.trim();
     setAnswer('');
     if (inputRef.current) {
@@ -208,7 +242,7 @@ export default function GamePage() {
       inputRef.current.focus();
     }
     ws.send(JSON.stringify({
-      type: 'submit_answer',
+      type: 'submit',
       answer: submittedAnswer,
     }));
   };
