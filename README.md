@@ -64,7 +64,7 @@ backend/
 │   └── services/
 │       └── gemini_service.py # Vertex AI / Gemini integration
 ├── alembic/                  # Database migrations
-├── tests/                    # Pytest test suite (47 tests)
+├── tests/                    # Pytest test suite (50 tests)
 ├── data/processed/           # Dictionary CSV data
 └── scripts/                  # Seed and data preparation scripts
 
@@ -189,13 +189,14 @@ See [`backend/.env.example`](backend/.env.example) for the full list. Key variab
 ```bash
 cd backend
 pip install -r requirements-dev.txt
-pytest -v                     # 47 tests: scoring, AI, game flow, dictionary, word levels
+pytest -v                     # 50 tests: scoring, AI, game flow, dictionary, word levels
 ```
 
 Test coverage includes:
 - **Scoring**: exact match, typo tolerance, case insensitivity, substring/superstring, descriptions, compound words, empty inputs, wrong answers
 - **AI opponent**: all difficulty levels, probability distributions, helper functions, fallback behavior
 - **Game flow**: room creation, join, turn validation, submit answer, ELO updates, leaderboard, vs-AI mode
+- **vs-AI turns**: AI auto-plays instantly after human submit, AI plays on state-poll, multi-round turn alternation
 - **API**: dictionary search, word level classification, AI text generation, auth, error handling
 
 ## CI/CD

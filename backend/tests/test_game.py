@@ -421,3 +421,144 @@ def test_leaderboard_returns_sorted():
     assert len(leaderboard) >= 2
     for i in range(len(leaderboard) - 1):
         assert leaderboard[i]["elo"] >= leaderboard[i + 1]["elo"]
+
+
+# -----------------------------------------------------------------------
+# VS-AI FLOW: AI AUTO-PLAYS INSTANTLY
+# -----------------------------------------------------------------------
+
+def test_vs_ai_ai_plays_after_human_submit():
+    """After human submits in vs_ai, the AI should auto-play instantly.
+    The turn should come back to the human, not stall on the AI.
+    """
+    from app.ai_player import ensure_ai_players_exist
+    ensure_ai_players_exist()
+
+    service = GameService()
+    player = service.create_guest("VSAITester")
+    result = service.create_room(
+        player_id=player["player_id"],
+        mode="vs_ai",
+        target_score=20,  # high target so game doesn't end quickly
+        ip="127.0.0.1",
+        ai_difficulty="easy",
+    )
+    room_code = result["room_code"]
+
+    # It should be the human's turn
+    state = service.room_state_for_player(room_code, player["player_id"], ip="127.0.0.1")
+    assert state["current_turn_player_id"] == player["player_id"]
+    assert state["current_word_ua"] is not None
+
+    # Get the correct answer to guarantee some progress
+    with get_db() as conn:
+        room = conn.execute(
+            text("SELECT current_word_en FROM rooms WHERE code = :code"),
+            {"code": room_code},
+        ).mappings().first()
+        correct = room["current_word_en"]
+
+    # Human submits correct answer
+    move_result = asyncio.run(
+        service.submit_answer(
+            room_code=room_code,
+            player_id=player["player_id"],
+            answer=correct,
+            ip="127.0.0.1",
+        )
+    )
+    assert move_result["points"] == 2
+
+    # After human submits, the AI should have auto-played.
+    # The turn should now be back to the human, NOT stuck on the AI.
+    state_after = service.room_state_for_player(room_code, player["player_id"], ip="127.0.0.1")
+
+    if not state_after.get("winner_id"):
+        # Game is still going — turn must be the human's
+        assert state_after["current_turn_player_id"] == player["player_id"], (
+            "Turn should be back to human after AI auto-play, but was: "
+            + str(state_after["current_turn_player_id"])
+        )
+        assert state_after["current_word_ua"] is not None
+
+
+def test_vs_ai_state_poll_triggers_ai_turn():
+    """Polling room state when it's the AI's turn should trigger instant AI play.
+    This tests the _apply_timeout_if_needed path.
+    """
+    from app.ai_player import ensure_ai_players_exist, AI_PLAYER_IDS
+    ensure_ai_players_exist()
+
+    service = GameService()
+    player = service.create_guest("PollAITester")
+    result = service.create_room(
+        player_id=player["player_id"],
+        mode="vs_ai",
+        target_score=20,
+        ip="127.0.0.1",
+        ai_difficulty="medium",
+    )
+    room_code = result["room_code"]
+
+    # Manually force the turn to the AI player to simulate the scenario
+    ai_pid = AI_PLAYER_IDS["medium"]
+    with get_db() as session:
+        session.execute(
+            text("UPDATE rooms SET current_turn = :ai_pid WHERE code = :code"),
+            {"ai_pid": ai_pid, "code": room_code},
+        )
+
+    # Now when we poll the room state, the AI's turn should be auto-played
+    state = service.room_state_for_player(room_code, player["player_id"], ip="127.0.0.1")
+
+    # After the state poll, the AI should have already played and the
+    # turn should be back to the human
+    if not state.get("winner_id"):
+        assert state["current_turn_player_id"] == player["player_id"], (
+            "After state poll, turn should be back to human, but was: "
+            + str(state["current_turn_player_id"])
+        )
+
+
+def test_vs_ai_multiple_rounds():
+    """Play several rounds in vs-AI mode to ensure turns alternate correctly."""
+    from app.ai_player import ensure_ai_players_exist
+    ensure_ai_players_exist()
+
+    service = GameService()
+    player = service.create_guest("MultiRoundTester")
+    result = service.create_room(
+        player_id=player["player_id"],
+        mode="vs_ai",
+        target_score=50,  # very high so we can play many rounds
+        ip="127.0.0.1",
+        ai_difficulty="easy",
+    )
+    room_code = result["room_code"]
+
+    for round_num in range(5):
+        state = service.room_state_for_player(room_code, player["player_id"], ip="127.0.0.1")
+        if state.get("winner_id") or state["status"] == "finished":
+            break  # game ended
+
+        assert state["current_turn_player_id"] == player["player_id"], (
+            f"Round {round_num}: expected human's turn, got {state['current_turn_player_id']}"
+        )
+
+        with get_db() as conn:
+            room = conn.execute(
+                text("SELECT current_word_en FROM rooms WHERE code = :code"),
+                {"code": room_code},
+            ).mappings().first()
+            correct = room["current_word_en"]
+
+        move_result = asyncio.run(
+            service.submit_answer(
+                room_code=room_code,
+                player_id=player["player_id"],
+                answer=correct,
+                ip="127.0.0.1",
+            )
+        )
+        if move_result["game_over"]:
+            break

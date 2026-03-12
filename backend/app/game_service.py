@@ -421,9 +421,25 @@ class GameService:
         return str(row["player_id"]) if row else None
 
     def _apply_timeout_if_needed(self, session: Session, room_code: str) -> bool:
+        """Apply turn timeout if the current turn has expired.
+
+        For AI rooms: if it's the AI's turn, the AI plays instantly instead of
+        timing out.  This prevents the "timeout loop" where the AI never
+        responds and both sides keep expiring.
+        """
+        from .ai_player import is_ai_player
+
         room = self._fetch_room(session, room_code)
         if not room or room["status"] != "playing" or not room["current_turn"]:
             return False
+
+        current_player = str(room["current_turn"])
+        ai_diff = self._ai_rooms.get(str(room["code"]))
+
+        # ── If it's the AI's turn, play instantly rather than letting it time out ──
+        if ai_diff and is_ai_player(current_player):
+            self._play_ai_turn_sync(session, room, ai_diff)
+            return True
 
         elapsed = self._elapsed_seconds(room)
         if elapsed <= settings.turn_timeout_seconds:
@@ -460,7 +476,7 @@ class GameService:
                 "match_id": match_id,
                 "room_code": room["code"],
                 "turn_number": room["turn_number"],
-                "player_id": room["current_turn"],
+                "player_id": current_player,
                 "ua_word": room["current_word_ua"] or "",
                 "correct_answer": room["current_word_en"] or "",
                 "user_answer": "",
@@ -481,14 +497,20 @@ class GameService:
                 WHERE id = :player_id
                 """
             ),
-            {"response_time": float(settings.turn_timeout_seconds), "player_id": room["current_turn"]},
+            {"response_time": float(settings.turn_timeout_seconds), "player_id": current_player},
         )
 
-        self._advance_turn(session, room, str(room["current_turn"]))
+        self._advance_turn(session, room, current_player)
         logger.info(
             "Turn timeout applied",
-            extra={"event": "turn_timeout", "room_code": room["code"], "player_id": room["current_turn"]},
+            extra={"event": "turn_timeout", "room_code": room["code"], "player_id": current_player},
         )
+
+        # If the turn now belongs to the AI, play it immediately
+        refreshed = self._fetch_room(session, str(room["code"]))
+        if refreshed and ai_diff and refreshed["current_turn"] and is_ai_player(str(refreshed["current_turn"])):
+            self._play_ai_turn_sync(session, refreshed, ai_diff)
+
         return True
 
     def _advance_turn(self, session: Session, room: Mapping[str, Any], last_player_id: str) -> None:
@@ -1029,6 +1051,18 @@ class GameService:
             else:
                 self._advance_turn(session, room, player_id)
 
+                # If it's now the AI's turn, play it instantly within the same
+                # transaction so the response already contains the AI move result.
+                ai_diff = self._ai_rooms.get(normalized_code)
+                if ai_diff:
+                    from .ai_player import is_ai_player
+                    refreshed = self._fetch_room(session, normalized_code)
+                    if refreshed and refreshed["current_turn"] and is_ai_player(str(refreshed["current_turn"])):
+                        ai_result = self._play_ai_turn_sync(session, refreshed, ai_diff)
+                        if ai_result and ai_result["game_over"]:
+                            game_over = True
+                            winner_id = ai_result["ai_player_id"]
+
             result = {
                 "room_code": normalized_code,
                 "turn_number": int(room["turn_number"]),
@@ -1040,11 +1074,14 @@ class GameService:
                 "winner_id": winner_id,
             }
 
-        # After releasing the DB session, trigger AI auto-move if it's now AI's turn
-        if not game_over:
+        # After releasing the DB session, broadcast AI result via WebSocket
+        if not result.get("game_over"):
             ai_diff = self._ai_rooms.get(normalized_code)
             if ai_diff and self._broadcast_fn:
-                asyncio.ensure_future(self._trigger_ai_move(normalized_code, ai_diff, self._broadcast_fn))
+                try:
+                    asyncio.ensure_future(self._trigger_ai_broadcast(normalized_code, self._broadcast_fn))
+                except RuntimeError:
+                    pass  # No event loop — in test or sync context
 
         return result
 
@@ -1568,90 +1605,118 @@ class GameService:
         return results
 
     # ---------- AI auto-move ----------
+
+    def _play_ai_turn_sync(self, session: Session, room: Mapping[str, Any], difficulty: str) -> dict[str, Any] | None:
+        """Play the AI's turn synchronously within an existing DB session.
+
+        Called from ``_apply_timeout_if_needed`` and ``_trigger_ai_move``.
+        Returns a summary dict (score, answer, game_over) or *None* if there
+        was nothing to do.
+        """
+        if not room or room["status"] != "playing":
+            return None
+
+        current_turn = room["current_turn"]
+        if not current_turn:
+            return None
+
+        # Guard: don't duplicate a move for this turn
+        existing_move = self._one(
+            session,
+            "SELECT id FROM moves WHERE match_id = :mid AND turn_number = :tn",
+            {"mid": room["match_id"], "tn": room["turn_number"]},
+        )
+        if existing_move:
+            return None
+
+        en_word = room["current_word_en"] or ""
+        ua_word = room["current_word_ua"] or ""
+        ai_player_id = str(current_turn)
+
+        score, ai_answer = simulate_ai_score(en_word, difficulty)
+
+        session.execute(
+            text("""
+                INSERT INTO moves (
+                    id, match_id, room_code, turn_number, player_id,
+                    ua_word, correct_answer, user_answer, score_awarded,
+                    response_time, scoring_source, is_timeout, created_at
+                ) VALUES (
+                    :id, :match_id, :room_code, :turn_number, :player_id,
+                    :ua_word, :correct_answer, :user_answer, :score_awarded,
+                    :response_time, :scoring_source, :is_timeout, :created_at
+                )
+            """),
+            {
+                "id": str(uuid.uuid4()),
+                "match_id": room["match_id"],
+                "room_code": str(room["code"]),
+                "turn_number": room["turn_number"],
+                "player_id": ai_player_id,
+                "ua_word": ua_word,
+                "correct_answer": en_word,
+                "user_answer": ai_answer,
+                "score_awarded": score,
+                "response_time": 0.1,
+                "scoring_source": "ai_local",
+                "is_timeout": False,
+                "created_at": _utc_now(),
+            },
+        )
+
+        if score > 0:
+            session.execute(
+                text("""
+                    UPDATE room_players
+                    SET score = score + :points
+                    WHERE room_code = :room_code AND player_id = :player_id
+                """),
+                {"points": score, "room_code": str(room["code"]), "player_id": ai_player_id},
+            )
+
+        updated_score = int(
+            self._scalar(
+                session,
+                "SELECT score FROM room_players WHERE room_code = :rc AND player_id = :pid",
+                {"rc": str(room["code"]), "pid": ai_player_id},
+            )
+        )
+
+        game_over = updated_score >= int(room["target_score"])
+        if game_over:
+            self._finish_match(session, room, ai_player_id)
+        else:
+            self._advance_turn(session, room, ai_player_id)
+
+        logger.info("AI (%s) scored %d on '%s'", difficulty, score, en_word)
+
+        return {
+            "ai_player_id": ai_player_id,
+            "score": score,
+            "answer": ai_answer,
+            "correct_answer": en_word,
+            "game_over": game_over,
+        }
+
     async def _trigger_ai_move(self, room_code: str, difficulty: str, broadcast_fn) -> None:
-        """Trigger instant AI move: score, record move, update score, advance turn.
-        All in one synchronous DB call, then broadcast result."""
+        """Trigger instant AI move and broadcast the result via WebSocket."""
         try:
+            result = None
             with get_db() as session:
                 room = self._fetch_room(session, room_code)
-                if not room or room["status"] != "playing":
-                    return
-                current_turn = room["current_turn"]
-                if not current_turn:
-                    return
+                result = self._play_ai_turn_sync(session, room, difficulty)
 
-                en_word = room["current_word_en"] or ""
-                ua_word = room["current_word_ua"] or ""
+            if not result:
+                return
 
-                # Instant AI scoring — no delay
-                score, ai_answer = simulate_ai_score(en_word, difficulty)
-
-                ai_player_id = current_turn  # It's the AI's turn
-
-                # Record the AI's move
-                session.execute(
-                    text("""
-                        INSERT INTO moves (
-                            id, match_id, room_code, turn_number, player_id,
-                            ua_word, correct_answer, user_answer, score_awarded,
-                            response_time, scoring_source, is_timeout, created_at
-                        ) VALUES (
-                            :id, :match_id, :room_code, :turn_number, :player_id,
-                            :ua_word, :correct_answer, :user_answer, :score_awarded,
-                            :response_time, :scoring_source, :is_timeout, :created_at
-                        )
-                    """),
-                    {
-                        "id": str(uuid.uuid4()),
-                        "match_id": room["match_id"],
-                        "room_code": room_code,
-                        "turn_number": room["turn_number"],
-                        "player_id": ai_player_id,
-                        "ua_word": ua_word,
-                        "correct_answer": en_word,
-                        "user_answer": ai_answer,
-                        "score_awarded": score,
-                        "response_time": 0.1,
-                        "scoring_source": "ai_local",
-                        "is_timeout": False,
-                        "created_at": _utc_now(),
-                    },
-                )
-
-                # Update AI player score
-                if score > 0:
-                    session.execute(
-                        text("""
-                            UPDATE room_players
-                            SET score = score + :points
-                            WHERE room_code = :room_code AND player_id = :player_id
-                        """),
-                        {"points": score, "room_code": room_code, "player_id": ai_player_id},
-                    )
-
-                # Check if AI won
-                updated_score = int(
-                    self._scalar(
-                        session,
-                        "SELECT score FROM room_players WHERE room_code = :rc AND player_id = :pid",
-                        {"rc": room_code, "pid": ai_player_id},
-                    )
-                )
-
-                game_over = updated_score >= int(room["target_score"])
-                if game_over:
-                    self._finish_match(session, room, ai_player_id)
-                else:
-                    self._advance_turn(session, room, ai_player_id)
-
-            # Broadcast AI result
+            # Broadcast AI result to all players in the room
             await broadcast_fn(room_code, {
                 "type": "ai_turn_result",
-                "player_id": ai_player_id,
-                "score": score,
-                "answer": ai_answer,
-                "correct_answer": en_word,
-                "game_over": game_over,
+                "player_id": result["ai_player_id"],
+                "score": result["score"],
+                "answer": result["answer"],
+                "correct_answer": result["correct_answer"],
+                "game_over": result["game_over"],
             })
 
             # Broadcast updated game state so human player sees new word/turn
@@ -1669,10 +1734,28 @@ class GameService:
             except Exception:
                 pass  # Non-critical — frontend will poll on next interaction
 
-            logger.info("AI (%s) scored %d on '%s'", difficulty, score, en_word)
-
         except Exception:
             logger.exception("AI instant move failed", extra={"event": "ai_move_failed", "room_code": room_code})
+
+    async def _trigger_ai_broadcast(self, room_code: str, broadcast_fn) -> None:
+        """Broadcast the latest game state to all players in an AI room.
+
+        Called *after* the AI move has already been committed to the DB
+        synchronously, so this only handles the WebSocket push.
+        """
+        try:
+            with get_db() as session:
+                room_players = self._fetch_room_players(session, room_code)
+                for rp in room_players:
+                    pid = rp["player_id"]
+                    try:
+                        state = self.room_state_for_player(room_code, pid, ip="ai")
+                        await broadcast_fn(room_code, {"type": "game_state", "data": state})
+                        break
+                    except Exception:
+                        continue
+        except Exception:
+            pass  # Non-critical
 
     # ---------- Second chance submit (Feature 7) ----------
     async def submit_second_chance(
