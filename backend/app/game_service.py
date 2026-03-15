@@ -323,10 +323,10 @@ class GameService:
                 session,
                 """
                 SELECT ua_word AS ua, en_word AS en FROM custom_words
-                WHERE player_id = :player_id AND approved = 1
+                WHERE player_id = :player_id AND approved = :approved
                 ORDER BY RANDOM() LIMIT 1
                 """,
-                {"player_id": custom_word_player_id},
+                {"player_id": custom_word_player_id, "approved": True},
             )
             if row:
                 return row
@@ -457,36 +457,41 @@ class GameService:
         if existing_move:
             return False
 
-        session.execute(
-            text(
-                """
-                INSERT INTO moves (
-                    id, match_id, room_code, turn_number, player_id,
-                    ua_word, correct_answer, user_answer, score_awarded,
-                    response_time, scoring_source, is_timeout, created_at
-                ) VALUES (
-                    :id, :match_id, :room_code, :turn_number, :player_id,
-                    :ua_word, :correct_answer, :user_answer, :score_awarded,
-                    :response_time, :scoring_source, :is_timeout, :created_at
-                )
-                """
-            ),
-            {
-                "id": str(uuid.uuid4()),
-                "match_id": match_id,
-                "room_code": room["code"],
-                "turn_number": room["turn_number"],
-                "player_id": current_player,
-                "ua_word": room["current_word_ua"] or "",
-                "correct_answer": room["current_word_en"] or "",
-                "user_answer": "",
-                "score_awarded": 0,
-                "response_time": float(settings.turn_timeout_seconds),
-                "scoring_source": "timeout",
-                "is_timeout": True,
-                "created_at": _utc_now(),
-            },
-        )
+        try:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO moves (
+                        id, match_id, room_code, turn_number, player_id,
+                        ua_word, correct_answer, user_answer, score_awarded,
+                        response_time, scoring_source, is_timeout, created_at
+                    ) VALUES (
+                        :id, :match_id, :room_code, :turn_number, :player_id,
+                        :ua_word, :correct_answer, :user_answer, :score_awarded,
+                        :response_time, :scoring_source, :is_timeout, :created_at
+                    )
+                    """
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "match_id": match_id,
+                    "room_code": room["code"],
+                    "turn_number": room["turn_number"],
+                    "player_id": current_player,
+                    "ua_word": room["current_word_ua"] or "",
+                    "correct_answer": room["current_word_en"] or "",
+                    "user_answer": "",
+                    "score_awarded": 0,
+                    "response_time": float(settings.turn_timeout_seconds),
+                    "scoring_source": "timeout",
+                    "is_timeout": True,
+                    "created_at": _utc_now(),
+                },
+            )
+        except IntegrityError:
+            # Race condition: a submit or another timeout beat us to it
+            session.rollback()
+            return False
 
         session.execute(
             text(
@@ -976,36 +981,41 @@ class GameService:
             # Instant local scoring — synchronous, no async, no LLM
             score = score_answer(answer, correct_answer)
 
-            session.execute(
-                text(
-                    """
-                    INSERT INTO moves (
-                        id, match_id, room_code, turn_number, player_id,
-                        ua_word, correct_answer, user_answer, score_awarded,
-                        response_time, scoring_source, is_timeout, created_at
-                    ) VALUES (
-                        :id, :match_id, :room_code, :turn_number, :player_id,
-                        :ua_word, :correct_answer, :user_answer, :score_awarded,
-                        :response_time, :scoring_source, :is_timeout, :created_at
-                    )
-                    """
-                ),
-                {
-                    "id": str(uuid.uuid4()),
-                    "match_id": room["match_id"],
-                    "room_code": normalized_code,
-                    "turn_number": room["turn_number"],
-                    "player_id": player_id,
-                    "ua_word": ua_word,
-                    "correct_answer": correct_answer,
-                    "user_answer": answer,
-                    "score_awarded": score,
-                    "response_time": float(elapsed),
-                    "scoring_source": "local",
-                    "is_timeout": False,
-                    "created_at": _utc_now(),
-                },
-            )
+            try:
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO moves (
+                            id, match_id, room_code, turn_number, player_id,
+                            ua_word, correct_answer, user_answer, score_awarded,
+                            response_time, scoring_source, is_timeout, created_at
+                        ) VALUES (
+                            :id, :match_id, :room_code, :turn_number, :player_id,
+                            :ua_word, :correct_answer, :user_answer, :score_awarded,
+                            :response_time, :scoring_source, :is_timeout, :created_at
+                        )
+                        """
+                    ),
+                    {
+                        "id": str(uuid.uuid4()),
+                        "match_id": room["match_id"],
+                        "room_code": normalized_code,
+                        "turn_number": room["turn_number"],
+                        "player_id": player_id,
+                        "ua_word": ua_word,
+                        "correct_answer": correct_answer,
+                        "user_answer": answer,
+                        "score_awarded": score,
+                        "response_time": float(elapsed),
+                        "scoring_source": "local",
+                        "is_timeout": False,
+                        "created_at": _utc_now(),
+                    },
+                )
+            except IntegrityError:
+                # Race condition: timeout or duplicate submit beat us
+                session.rollback()
+                raise HTTPException(status_code=409, detail="Turn already submitted")
 
             session.execute(
                 text(
@@ -1964,18 +1974,18 @@ class GameService:
                 SELECT
                     m.ua_word,
                     m.correct_answer,
-                    m.user_answer,
+                    MAX(m.user_answer) AS user_answer,
                     MAX(m.created_at) AS created_at,
                     COUNT(*) AS times_wrong
                 FROM moves m
                 WHERE m.player_id = :player_id
                   AND m.score_awarded = 0
-                  AND m.is_timeout = 0
+                  AND m.is_timeout = :is_timeout
                 GROUP BY m.ua_word, m.correct_answer
                 ORDER BY times_wrong DESC, MAX(m.created_at) DESC
                 LIMIT :lim
                 """,
-                {"player_id": player_id, "lim": limit},
+                {"player_id": player_id, "is_timeout": False, "lim": limit},
             )
 
         results = []

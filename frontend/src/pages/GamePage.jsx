@@ -16,12 +16,10 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import api from "@/lib/api";
+import api, { resolveWsUrl } from "@/lib/api";
 import CefrBadge from "@/components/CefrBadge";
 
-const WS_URL = (process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000')
-  .replace('https://', 'wss://')
-  .replace('http://', 'ws://');
+const WS_URL = resolveWsUrl();
 
 export default function GamePage() {
   const navigate = useNavigate();
@@ -58,131 +56,183 @@ export default function GamePage() {
     fetchInitialState();
   }, [code]);
 
-  // WebSocket connection for all game events
+  // WebSocket connection for all game events — with auto-reconnect
   useEffect(() => {
     const token = localStorage.getItem("accessToken");
     if (!token || !code) return;
-    const wsUrl = `${WS_URL}/ws/rooms/${code}?token=${token}`;
-    const socket = new WebSocket(wsUrl);
-    wsRef.current = socket;
-    socket.onopen = () => {
-      console.log('WebSocket connected');
-    };
-    socket.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        switch (msg.type) {
-          case 'game_state':
-            if (msg.data?.status === 'finished') {
-              navigate(`/end/${code}`);
-              return;
-            }
-            setGameState(msg.data || msg);
-            break;
-          case 'room_state':
-          case 'state_update':
-            if ((msg.state || msg.data || msg)?.status === 'finished') {
-              navigate(`/end/${code}`);
-              return;
-            }
-            setGameState(msg.state || msg.data || msg);
-            break;
-          case 'new_word':
-          case 'word_changed': {
-            const newWord = msg.word || msg.current_word;
-            if (newWord && newWord !== currentWordRef.current) {
-              currentWordRef.current = newWord;
-              setGameState((prev) => ({ ...prev, current_turn: { ...prev.current_turn, word_ua: newWord } }));
-              setAnswer('');
-              inputRef.current?.focus();
-            } else {
-              setGameState((prev) => ({ ...prev, current_turn: { ...prev.current_turn, word_ua: newWord } }));
-            }
-            break;
-          }
-          case 'turn_result':
-          case 'answer_result':
-            setLastFeedback({
-              player_nickname: msg.player_nickname,
-              answer: msg.answer,
-              points: msg.score,
-              correct_en: msg.correct_answer,
-              scoring_source: msg.scoring_source,
-              status: msg.status,
-              word_ua: msg.word_ua,
-            });
-            setGameState((prev) => ({ ...prev, players: msg.scores || prev.players }));
-            break;
-          case 'game_over':
-            navigate(`/end/${code}`);
-            break;
-          case 'player_joined':
-          case 'player_left':
-            setGameState((prev) => ({ ...prev, players: msg.players }));
-            break;
-          case 'ping':
-            socket.send(JSON.stringify({ type: 'pong' }));
-            break;
-          case 'ai_turn_result':
-            // Update AI score display instantly
-            if (msg.game_over) {
-              navigate(`/end/${code}`);
+
+    let socket = null;
+    let reconnectTimer = null;
+    let disposed = false;
+    let reconnectDelay = 1000; // start at 1s, back off up to 8s
+
+    function connect() {
+      if (disposed) return;
+      const wsUrl = `${WS_URL}/ws/rooms/${code}?token=${token}`;
+      socket = new WebSocket(wsUrl);
+      wsRef.current = socket;
+
+      socket.onopen = () => {
+        console.log('WebSocket connected');
+        reconnectDelay = 1000; // reset on successful connect
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          switch (msg.type) {
+            case 'game_state':
+              if (msg.data?.status === 'finished') {
+                navigate(`/end/${code}`);
+                return;
+              }
+              setGameState(msg.data || msg);
+              break;
+            case 'room_state':
+            case 'state_update':
+              if ((msg.state || msg.data || msg)?.status === 'finished') {
+                navigate(`/end/${code}`);
+                return;
+              }
+              setGameState(msg.state || msg.data || msg);
+              break;
+            case 'new_word':
+            case 'word_changed': {
+              const newWord = msg.word || msg.current_word;
+              if (newWord && newWord !== currentWordRef.current) {
+                currentWordRef.current = newWord;
+                setGameState((prev) => prev ? ({ ...prev, current_turn: { ...prev.current_turn, word_ua: newWord } }) : prev);
+                setAnswer('');
+                inputRef.current?.focus();
+              } else {
+                setGameState((prev) => prev ? ({ ...prev, current_turn: { ...prev.current_turn, word_ua: newWord } }) : prev);
+              }
               break;
             }
-            setGameState(prev => {
-              if (!prev) return prev;
-              const updatedPlayers = prev.players.map(p =>
-                p.user_id === msg.player_id
-                  ? { ...p, score: (p.score || 0) + msg.score }
-                  : p
-              );
-              return { ...prev, players: updatedPlayers };
-            });
-            setLastFeedback({
-              player_nickname: msg.player_id,
-              answer: msg.answer,
-              points: msg.score,
-              correct_en: msg.correct_answer,
-              scoring_source: 'ai',
-              status: msg.score > 0 ? 'completed' : 'wrong',
-              word_ua: '',
-            });
-            break;
-          case 'submit_ack': {
-            const data = msg.data || msg;
-            if (data.game_over) {
+            case 'turn_result':
+            case 'answer_result':
+              setLastFeedback({
+                player_nickname: msg.player_nickname,
+                answer: msg.answer,
+                points: msg.score,
+                correct_en: msg.correct_answer,
+                scoring_source: msg.scoring_source,
+                status: msg.status,
+                word_ua: msg.word_ua,
+              });
+              setGameState((prev) => prev ? ({ ...prev, players: msg.scores || prev.players }) : prev);
+              break;
+            case 'game_over':
               navigate(`/end/${code}`);
               break;
+            case 'player_joined':
+            case 'player_left':
+              setGameState((prev) => prev ? ({ ...prev, players: msg.players }) : prev);
+              break;
+            case 'ping':
+              socket.send(JSON.stringify({ type: 'pong' }));
+              break;
+            case 'opponent_left':
+              toast.info(msg.message || "Your opponent left.");
+              break;
+            case 'ai_turn_result':
+              if (msg.game_over) {
+                navigate(`/end/${code}`);
+                break;
+              }
+              setGameState(prev => {
+                if (!prev) return prev;
+                const updatedPlayers = prev.players.map(p =>
+                  p.user_id === msg.player_id
+                    ? { ...p, score: (p.score || 0) + msg.score }
+                    : p
+                );
+                return { ...prev, players: updatedPlayers };
+              });
+              setLastFeedback({
+                player_nickname: msg.player_id,
+                answer: msg.answer,
+                points: msg.score,
+                correct_en: msg.correct_answer,
+                scoring_source: 'ai',
+                status: msg.score > 0 ? 'completed' : 'wrong',
+                word_ua: '',
+              });
+              break;
+            case 'submit_ack': {
+              const data = msg.data || msg;
+              if (data.game_over) {
+                navigate(`/end/${code}`);
+                break;
+              }
+              setLastFeedback({
+                player_nickname: 'You',
+                answer: data.answer || '',
+                points: data.points || 0,
+                correct_en: data.correct_answer || '',
+                scoring_source: data.scoring_source || 'local',
+                status: data.points > 0 ? 'completed' : 'wrong',
+                word_ua: '',
+              });
+              setIsSubmitting(false);
+              break;
             }
-            setLastFeedback({
-              player_nickname: 'You',
-              answer: data.answer || '',
-              points: data.points || 0,
-              correct_en: data.correct_answer || '',
-              scoring_source: data.scoring_source || 'local',
-              status: data.points > 0 ? 'completed' : 'wrong',
-              word_ua: '',
-            });
-            setIsSubmitting(false);
-            break;
+            case 'error':
+              console.warn('WS error message:', msg.detail);
+              break;
+            default:
+              break;
           }
+        } catch (e) {
+          // ignore parse errors
         }
-      } catch (e) {
-        // ignore parse errors
+      };
+
+      socket.onclose = (ev) => {
+        wsRef.current = null;
+        console.log('WebSocket disconnected', ev.code);
+        // Auto-reconnect unless intentionally disposed or auth failure
+        if (!disposed && ev.code !== 4401) {
+          reconnectTimer = setTimeout(() => {
+            reconnectDelay = Math.min(reconnectDelay * 2, 8000);
+            connect();
+          }, reconnectDelay);
+        }
+      };
+
+      socket.onerror = (err) => {
+        console.error('WebSocket error:', err);
+      };
+    }
+
+    connect();
+
+    // Poll state as a safety net in case WS is temporarily down
+    const pollTimer = setInterval(async () => {
+      try {
+        const response = await api.get(`/rooms/${code}/state`);
+        const data = response.data;
+        if (data?.status === 'finished') {
+          navigate(`/end/${code}`);
+          return;
+        }
+        // Only update if WS is not connected (avoid overwriting fresher WS data)
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          setGameState(data);
+        }
+      } catch {
+        // ignore — WS is the primary channel
       }
-    };
-    socket.onclose = () => {
-      wsRef.current = null;
-      console.log('WebSocket disconnected');
-    };
-    socket.onerror = (err) => {
-      console.error('WebSocket error:', err);
-    };
+    }, 5000);
+
     return () => {
-      socket.close();
+      disposed = true;
+      clearTimeout(reconnectTimer);
+      clearInterval(pollTimer);
+      if (socket) socket.close();
       wsRef.current = null;
     };
-  }, [code]);
+  }, [code]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePauseResume = () => {
     const ws = wsRef.current;
@@ -230,21 +280,52 @@ export default function GamePage() {
     setIsSecondChanceSubmitting(false);
   };
 
-  // Submit answer via WebSocket
-  const handleSubmit = (e) => {
+  // Submit answer via WebSocket (primary) or HTTP fallback
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    const ws = wsRef.current;
-    if (!answer.trim() || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!answer.trim() || isSubmitting) return;
     const submittedAnswer = answer.trim();
     setAnswer('');
+    setIsSubmitting(true);
     if (inputRef.current) {
       inputRef.current.value = '';
       inputRef.current.focus();
     }
-    ws.send(JSON.stringify({
-      type: 'submit',
-      answer: submittedAnswer,
-    }));
+
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      // Primary: send via WebSocket
+      ws.send(JSON.stringify({ type: 'submit', answer: submittedAnswer }));
+      // isSubmitting will be cleared by submit_ack handler
+    } else {
+      // Fallback: submit via HTTP POST
+      try {
+        const response = await api.post(`/rooms/${code}/submit`, { answer: submittedAnswer });
+        const data = response.data;
+        if (data.game_over) {
+          navigate(`/end/${code}`);
+          return;
+        }
+        setLastFeedback({
+          player_nickname: 'You',
+          answer: submittedAnswer,
+          points: data.points || 0,
+          correct_en: data.correct_answer || '',
+          scoring_source: data.scoring_source || 'local',
+          status: data.points > 0 ? 'completed' : 'wrong',
+          word_ua: '',
+        });
+        // Refresh state after HTTP submit since no WS state push will arrive
+        try {
+          const stateRes = await api.get(`/rooms/${code}/state`);
+          setGameState(stateRes.data);
+        } catch { /* ignore */ }
+      } catch (error) {
+        const detail = error.response?.data?.detail || "Failed to submit answer";
+        toast.error(detail);
+      }
+      setIsSubmitting(false);
+    }
   };
 
   if (!gameState) {

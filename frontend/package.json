@@ -1,7 +1,6 @@
 {
   "name": "frontend",
   "version": "0.1.0",
-  "build": "craco build && cp public/_redirects build/_redirects",
   "private": true,
   "dependencies": {
     "@hookform/resolvers": "^5.0.1",
@@ -60,6 +59,7 @@
   "scripts": {
     "start": "craco start",
     "build": "craco build",
+    "serve": "serve -s build -l 3000",
     "test": "craco test"
   },
   "browserslist": {

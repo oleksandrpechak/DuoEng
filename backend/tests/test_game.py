@@ -562,3 +562,101 @@ def test_vs_ai_multiple_rounds():
         )
         if move_result["game_over"]:
             break
+
+
+def test_wrong_words_recorded_after_wrong_answer():
+    """Wrong answers (score 0, not timeout) should appear in get_wrong_words."""
+    service = GameService()
+    p1 = service.create_guest("WrongWordAlice")
+    p2 = service.create_guest("WrongWordBob")
+
+    create = service.create_room(
+        player_id=p1["player_id"],
+        mode="classic",
+        target_score=10,
+        ip="127.0.0.1",
+    )
+    room_code = create["room_code"]
+    service.join_room(room_code=room_code, player_id=p2["player_id"], ip="127.0.0.2")
+
+    state = service.room_state_for_player(room_code, p1["player_id"], ip="127.0.0.1")
+    current_turn = state["current_turn_player_id"]
+    acting_player = p1 if current_turn == p1["player_id"] else p2
+    acting_ip = "127.0.0.1" if current_turn == p1["player_id"] else "127.0.0.2"
+
+    # Get the correct answer from DB so we know what word it is
+    with get_db() as conn:
+        room_row = conn.execute(
+            text("SELECT current_word_en, current_word_ua FROM rooms WHERE code = :code"),
+            {"code": room_code},
+        ).mappings().first()
+        correct_en = room_row["current_word_en"]
+        correct_ua = room_row["current_word_ua"]
+
+    # Submit a completely wrong answer
+    result = asyncio.run(
+        service.submit_answer(
+            room_code=room_code,
+            player_id=acting_player["player_id"],
+            answer="zzz_completely_wrong_xyzxyz",
+            ip=acting_ip,
+        )
+    )
+    assert result["points"] == 0
+
+    # Check wrong words for the player who answered wrong
+    wrong = service.get_wrong_words(acting_player["player_id"], limit=50)
+    assert len(wrong) >= 1
+    # The wrong entry should match the word from this turn
+    found = any(
+        w["correct_answer"] == correct_en and w["ua_word"] == correct_ua
+        for w in wrong
+    )
+    assert found, f"Expected wrong word {correct_ua}→{correct_en} in {wrong}"
+    entry = next(w for w in wrong if w["correct_answer"] == correct_en)
+    assert entry["times_wrong"] >= 1
+    assert entry["user_answer"] is not None
+
+
+def test_correct_answer_not_in_wrong_words():
+    """A correct answer (score > 0) should NOT appear in wrong words."""
+    service = GameService()
+    p1 = service.create_guest("CorrectAlice")
+    p2 = service.create_guest("CorrectBob")
+
+    create = service.create_room(
+        player_id=p1["player_id"],
+        mode="classic",
+        target_score=10,
+        ip="127.0.0.1",
+    )
+    room_code = create["room_code"]
+    service.join_room(room_code=room_code, player_id=p2["player_id"], ip="127.0.0.2")
+
+    state = service.room_state_for_player(room_code, p1["player_id"], ip="127.0.0.1")
+    current_turn = state["current_turn_player_id"]
+    acting_player = p1 if current_turn == p1["player_id"] else p2
+    acting_ip = "127.0.0.1" if current_turn == p1["player_id"] else "127.0.0.2"
+
+    # Get the correct answer and submit it
+    with get_db() as conn:
+        room_row = conn.execute(
+            text("SELECT current_word_en FROM rooms WHERE code = :code"),
+            {"code": room_code},
+        ).mappings().first()
+        correct_en = room_row["current_word_en"]
+
+    result = asyncio.run(
+        service.submit_answer(
+            room_code=room_code,
+            player_id=acting_player["player_id"],
+            answer=correct_en,
+            ip=acting_ip,
+        )
+    )
+    assert result["points"] >= 1  # Should score
+
+    # Wrong words should NOT include this word
+    wrong = service.get_wrong_words(acting_player["player_id"], limit=50)
+    found = any(w["correct_answer"] == correct_en for w in wrong)
+    assert not found, f"Correct answer {correct_en} should NOT be in wrong words"

@@ -10,7 +10,7 @@ import axios from "axios";
  *      replaced by "-backend".
  *   3. Fallback to localhost for local development.
  */
-function resolveBackendUrl() {
+export function resolveBackendUrl() {
   if (process.env.REACT_APP_BACKEND_URL) {
     return process.env.REACT_APP_BACKEND_URL;
   }
@@ -24,6 +24,16 @@ function resolveBackendUrl() {
   }
 
   return "http://localhost:8000";
+}
+
+/**
+ * Derive the WebSocket URL from the backend HTTP URL.
+ * https://… → wss://…   http://… → ws://…
+ */
+export function resolveWsUrl() {
+  return resolveBackendUrl()
+    .replace(/^https:\/\//, "wss://")
+    .replace(/^http:\/\//, "ws://");
 }
 
 const rawApiUrl = resolveBackendUrl();
