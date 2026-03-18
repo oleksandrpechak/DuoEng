@@ -1,5 +1,13 @@
 # render.yaml – Render Blueprint for DuoEng
-# This tells Render how to build and deploy the frontend and backend.
+# https://docs.render.com/blueprint-spec
+#
+# IMPORTANT: If your frontend is already created as a "Web Service" in the
+# Render dashboard you must either:
+#   a) Delete it and re-create via "New Blueprint Instance", or
+#   b) Change it to a "Static Site" in the Render dashboard manually,
+#      setting Build Command and Publish Directory as below.
+#
+# For the _redirects SPA rewrite to work the service MUST be a Static Site.
 
 services:
   # ── Frontend (Static Site) ──
@@ -12,6 +20,10 @@ services:
       - type: rewrite
         source: /*
         destination: /index.html
+    headers:
+      - path: /static/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
 
   # ── Backend (Web Service) ──
   - type: web

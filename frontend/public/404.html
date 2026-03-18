@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DuoEng – Redirecting…</title>
+  <script>
+    // SPA fallback: Render Static Sites serve 404.html for unknown paths.
+    // We redirect the browser to / with the original path encoded in the URL
+    // so React Router can handle it client-side.
+    //
+    // If the path is already "/", just reload (shouldn't happen).
+    const path = window.location.pathname + window.location.search + window.location.hash;
+    if (path && path !== '/') {
+      // Use sessionStorage so we can restore the route after redirect
+      sessionStorage.setItem('spa_redirect', path);
+      window.location.replace('/');
+    }
+  </script>
+</head>
+<body>
+  <p>Redirecting…</p>
+</body>
+</html>
