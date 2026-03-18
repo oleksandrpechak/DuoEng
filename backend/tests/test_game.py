@@ -211,6 +211,45 @@ def test_scoring_completely_wrong():
     assert score_answer("xyz", "hello") == 0
 
 
+def test_scoring_definition_match():
+    """Answer matching the word's definition should score 1."""
+    # Definition: "a feeling of great happiness"
+    assert score_answer(
+        "a feeling of great happiness", "joy",
+        definition="a feeling of great happiness"
+    ) == 1
+
+
+def test_scoring_definition_close_match():
+    """Answer closely resembling the definition should score 1."""
+    assert score_answer(
+        "feeling of happiness", "joy",
+        definition="a feeling of great happiness"
+    ) == 1
+
+
+def test_scoring_definition_no_match():
+    """Unrelated answer should not match the definition."""
+    assert score_answer(
+        "a large vehicle", "joy",
+        definition="a feeling of great happiness"
+    ) == 0
+
+
+def test_scoring_definition_substring():
+    """Answer that is a substring of the definition should score 1."""
+    assert score_answer(
+        "feeling of great happiness", "joy",
+        definition="a feeling of great happiness and satisfaction"
+    ) == 1
+
+
+def test_scoring_definition_empty():
+    """Empty definition should not affect scoring."""
+    assert score_answer("elephant", "computer", definition="") == 0
+    assert score_answer("hello", "hello", definition="") == 2
+
+
 def test_scoring_same_length_different_words():
     """Same length but different letters — low similarity."""
     assert score_answer("abc", "xyz") == 0

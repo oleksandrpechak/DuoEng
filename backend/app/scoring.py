@@ -5,8 +5,8 @@ import logging
 logger = logging.getLogger("duoeng.scoring")
 
 
-def score_answer(player_answer: str, correct_word: str, ua_word: str = "") -> int:
-    """Instant local scoring with description support.
+def score_answer(player_answer: str, correct_word: str, ua_word: str = "", definition: str = "") -> int:
+    """Instant local scoring with description and definition support.
     
     Scoring rules:
     - Exact match → 2 pts
@@ -15,6 +15,7 @@ def score_answer(player_answer: str, correct_word: str, ua_word: str = "") -> in
     - Substring match (answer contains correct or vice versa, min 3 chars) → 1 pt
     - Description check: if answer is 3+ words and contains the correct word → 1 pt
     - Description check: if correct word appears as a meaningful part of the answer → 1 pt
+    - Definition match: if answer closely matches the word's stored definition → 1 pt
     """
     import difflib
 
@@ -60,6 +61,41 @@ def score_answer(player_answer: str, correct_word: str, ua_word: str = "") -> in
         for cw in correct_words:
             if len(cw) >= 3 and answer == cw:
                 return 1
+
+    # ── Definition-based scoring ──
+    # If the word has a stored definition, check if the player's answer
+    # describes the word correctly (matches the definition text).
+    if definition and len(answer) >= 5:
+        def_lower = definition.strip().lower()
+        if def_lower:
+            # Check similarity between answer and definition
+            def_ratio = difflib.SequenceMatcher(None, answer, def_lower).ratio()
+            if def_ratio >= 0.65:
+                return 1
+
+            # Check if the answer is a significant substring of the definition
+            if len(answer) >= 8 and answer in def_lower:
+                return 1
+
+            # Check if the definition is contained in the answer
+            if len(def_lower) >= 8 and def_lower in answer:
+                return 1
+
+            # Check word overlap between answer and definition
+            def_words = set(def_lower.split())
+            answer_word_set = set(answer_words) if answer_words else set(answer.split())
+            # Remove common stop words for better matching
+            stop_words = {"a", "an", "the", "is", "are", "was", "were", "be", "been",
+                         "to", "of", "in", "for", "on", "with", "at", "by", "it",
+                         "that", "this", "and", "or", "but", "not", "no", "so"}
+            meaningful_def = def_words - stop_words
+            meaningful_ans = answer_word_set - stop_words
+            if meaningful_def and meaningful_ans:
+                overlap = meaningful_def & meaningful_ans
+                # If 50%+ of meaningful answer words appear in the definition
+                overlap_ratio = len(overlap) / max(len(meaningful_ans), 1)
+                if overlap_ratio >= 0.5 and len(overlap) >= 2:
+                    return 1
 
     return 0
 

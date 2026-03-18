@@ -8,6 +8,9 @@ import {
   Star,
   Gamepad2,
   XCircle,
+  Bot,
+  Users,
+  Trophy,
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
@@ -17,6 +20,9 @@ export default function WrongWordsPage() {
   const [wrongWords, setWrongWords] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [favouriteLoading, setFavouriteLoading] = useState(new Set());
+  const [aiDifficulty, setAiDifficulty] = useState("medium");
+  const [isPracticeLoading, setIsPracticeLoading] = useState(false);
+  const [isAiPracticeLoading, setIsAiPracticeLoading] = useState(false);
 
   const accessToken = localStorage.getItem("accessToken");
   const userId = localStorage.getItem("userId");
@@ -58,6 +64,7 @@ export default function WrongWordsPage() {
   };
 
   const handlePractice = async () => {
+    setIsPracticeLoading(true);
     // Collect unique correct_answer word IDs
     const wordIds = [...new Set(wrongWords.map(w =>
       w.correct_answer.toLowerCase().replace(/ /g, "_").replace(/'/g, "").slice(0, 64)
@@ -75,6 +82,29 @@ export default function WrongWordsPage() {
     } catch (error) {
       toast.error("Failed to create practice room");
     }
+    setIsPracticeLoading(false);
+  };
+
+  const handlePracticeWithAI = async () => {
+    setIsAiPracticeLoading(true);
+    const wordIds = [...new Set(wrongWords.map(w =>
+      w.correct_answer.toLowerCase().replace(/ /g, "_").replace(/'/g, "").slice(0, 64)
+    ))].slice(0, 50);
+
+    try {
+      const response = await api.post("/rooms", {
+        mode: "vs_ai",
+        target_score: Math.min(wrongWords.length, 10),
+        word_level: "B1",
+        word_ids: wordIds,
+        ai_difficulty: aiDifficulty,
+      });
+      toast.success("AI practice room created! 🤖");
+      navigate(`/game/${response.data.code}`);
+    } catch (error) {
+      toast.error("Failed to create AI practice room");
+    }
+    setIsAiPracticeLoading(false);
   };
 
   const getColorClass = (timesWrong) => {
@@ -106,15 +136,75 @@ export default function WrongWordsPage() {
           </div>
         </div>
 
-        {/* Practice Button */}
+        {/* Practice Buttons */}
         {wrongWords.length > 0 && (
-          <Button
-            className="w-full rounded-2xl h-12 text-base font-bold bg-primary hover:bg-primary/90 flex items-center justify-center gap-2"
-            onClick={handlePractice}
-          >
-            <Gamepad2 className="w-5 h-5" />
-            Practice These Words
-          </Button>
+          <div className="space-y-3">
+            {/* Practice with AI Section */}
+            <Card className="rounded-2xl border-2 border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-950/20">
+              <CardContent className="p-4 space-y-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <Bot className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                  <span className="font-heading text-base font-bold text-purple-800 dark:text-purple-200">
+                    Train with AI
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Practice your wrong words against the AI bot. Choose a difficulty:
+                </p>
+
+                {/* AI Difficulty Selector */}
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { value: "easy", label: "Easy", desc: "For practice", icon: Users, color: "border-green-400 bg-green-50 dark:bg-green-950/30" },
+                    { value: "medium", label: "Medium", desc: "Balanced", icon: Bot, color: "border-yellow-400 bg-yellow-50 dark:bg-yellow-950/30" },
+                    { value: "hard", label: "Hard", desc: "Expert", icon: Trophy, color: "border-red-400 bg-red-50 dark:bg-red-950/30" },
+                  ].map((item) => (
+                    <button
+                      key={item.value}
+                      className={`flex flex-col items-center p-2.5 rounded-xl border-2 cursor-pointer transition-all text-center ${
+                        aiDifficulty === item.value
+                          ? `${item.color} ring-2 ring-offset-1 ring-purple-400/40`
+                          : "border-border hover:border-purple-300 bg-background"
+                      }`}
+                      onClick={() => setAiDifficulty(item.value)}
+                    >
+                      <item.icon className="w-4 h-4 mb-1" />
+                      <span className="text-xs font-bold">{item.label}</span>
+                      <span className="text-[10px] text-muted-foreground">{item.desc}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <Button
+                  className="w-full rounded-2xl h-11 text-base font-bold bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center gap-2"
+                  onClick={handlePracticeWithAI}
+                  disabled={isAiPracticeLoading}
+                >
+                  {isAiPracticeLoading ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Bot className="w-5 h-5" />
+                  )}
+                  {isAiPracticeLoading ? "Creating..." : "Start AI Practice"}
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Practice PvP Button */}
+            <Button
+              variant="outline"
+              className="w-full rounded-2xl h-11 text-base font-bold flex items-center justify-center gap-2"
+              onClick={handlePractice}
+              disabled={isPracticeLoading}
+            >
+              {isPracticeLoading ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <Gamepad2 className="w-5 h-5" />
+              )}
+              {isPracticeLoading ? "Creating..." : "Practice with a Friend (PvP)"}
+            </Button>
+          </div>
         )}
 
         {/* Wrong Words List */}

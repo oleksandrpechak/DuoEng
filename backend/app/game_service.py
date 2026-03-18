@@ -978,8 +978,19 @@ class GameService:
             correct_answer = room["current_word_en"] or ""
             ua_word = room["current_word_ua"] or ""
 
+            # Fetch word definition for description-based scoring
+            word_definition = ""
+            if ua_word and correct_answer:
+                word_row = self._one(
+                    session,
+                    "SELECT definition FROM words WHERE en = :en AND ua = :ua LIMIT 1",
+                    {"en": correct_answer, "ua": ua_word},
+                )
+                if word_row and word_row.get("definition"):
+                    word_definition = str(word_row["definition"])
+
             # Instant local scoring — synchronous, no async, no LLM
-            score = score_answer(answer, correct_answer)
+            score = score_answer(answer, correct_answer, ua_word=ua_word, definition=word_definition)
 
             try:
                 session.execute(
@@ -1807,9 +1818,21 @@ class GameService:
                 raise HTTPException(status_code=409, detail="Second chance expired")
 
             correct_answer = room["current_word_en"] or ""
+            ua_word = room["current_word_ua"] or ""
+
+            # Fetch word definition for description-based scoring
+            word_definition = ""
+            if ua_word and correct_answer:
+                word_row = self._one(
+                    session,
+                    "SELECT definition FROM words WHERE en = :en AND ua = :ua LIMIT 1",
+                    {"en": correct_answer, "ua": ua_word},
+                )
+                if word_row and word_row.get("definition"):
+                    word_definition = str(word_row["definition"])
 
         # Use instant local scoring for second chance
-        score = score_answer(answer, correct_answer)
+        score = score_answer(answer, correct_answer, ua_word=ua_word, definition=word_definition)
 
         with get_db() as session:
             room = self._fetch_room(session, normalized_code)
